@@ -1,0 +1,610 @@
+package main
+
+import (
+	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"embed"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"io/fs"
+	"io/ioutil"
+	"log"
+	"math/big"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/elazarl/goproxy"
+)
+
+//go:embed ui/*
+var uiFS embed.FS
+
+const (
+	maxStoredBody    = 1 << 20 // 1 MB per body
+	maxStoredEntries = 1000    // circular buffer size
+)
+
+// Capture represents a single proxied transaction (request + response)
+type Capture struct {
+	ID                 int64               `json:"id"`
+	Time               time.Time           `json:"time"`
+	Method             string              `json:"method"`
+	URL                string              `json:"url"`
+	RequestHeaders     map[string][]string `json:"request_headers"`
+	RequestBodyBase64  string              `json:"request_body"` // base64 or truncated raw (string)
+	ResponseStatus     int                 `json:"response_status"`
+	ResponseHeaders    map[string][]string `json:"response_headers"`
+	ResponseBodyBase64 string              `json:"response_body"`
+	DurationMs         int64               `json:"duration_ms"`
+	Notes              string              `json:"notes,omitempty"`
+}
+
+type captureStore struct {
+	sync.Mutex
+	buf   []Capture
+	next  int
+	count int
+	seq   int64
+}
+
+func newCaptureStore(cap int) *captureStore {
+	return &captureStore{
+		buf:  make([]Capture, cap),
+		next: 0,
+		seq:  1,
+	}
+}
+
+func (s *captureStore) add(c Capture) Capture {
+	s.Lock()
+	defer s.Unlock()
+	c.ID = s.seq
+	s.seq++
+	s.buf[s.next] = c
+	idx := s.next
+	s.next = (s.next + 1) % len(s.buf)
+	if s.count < len(s.buf) {
+		s.count++
+	}
+	// return stored copy with assigned ID
+	return s.buf[idx]
+}
+
+func (s *captureStore) list() []Capture {
+	s.Lock()
+	defer s.Unlock()
+	out := make([]Capture, 0, s.count)
+	// oldest first
+	start := (s.next - s.count + len(s.buf)) % len(s.buf)
+	for i := 0; i < s.count; i++ {
+		out = append(out, s.buf[(start+i)%len(s.buf)])
+	}
+	return out
+}
+
+func (s *captureStore) get(id int64) (Capture, bool) {
+	s.Lock()
+	defer s.Unlock()
+	for i := 0; i < s.count; i++ {
+		idx := (s.next - s.count + i + len(s.buf)) % len(s.buf)
+		if s.buf[idx].ID == id {
+			return s.buf[idx], true
+		}
+	}
+	return Capture{}, false
+}
+
+// small helper: read up to N bytes and return as string (base64 would be safer for arbitrary bytes).
+func readLimitedBody(r io.ReadCloser, max int) (string, io.ReadCloser, error) {
+	if r == nil {
+		return "", ioutil.NopCloser(bytes.NewReader(nil)), nil
+	}
+	defer r.Close()
+	var buf bytes.Buffer
+	limited := io.LimitReader(r, int64(max)+1)
+	n, err := io.Copy(&buf, limited)
+	if err != nil {
+		return "", ioutil.NopCloser(bytes.NewReader(nil)), err
+	}
+	data := buf.Bytes()
+	if n > int64(max) {
+		// truncated
+		return string(data[:max]) + "\n--truncated--", ioutil.NopCloser(bytes.NewReader(data)), nil
+	}
+	return string(data), ioutil.NopCloser(bytes.NewReader(data)), nil
+}
+
+// SSE broadcaster for live updates
+type sseBroker struct {
+	sync.Mutex
+	clients map[chan Capture]struct{}
+}
+
+func newSseBroker() *sseBroker {
+	return &sseBroker{
+		clients: make(map[chan Capture]struct{}),
+	}
+}
+
+func (b *sseBroker) addClient() chan Capture {
+	ch := make(chan Capture, 10)
+	b.Lock()
+	b.clients[ch] = struct{}{}
+	b.Unlock()
+	return ch
+}
+
+func (b *sseBroker) removeClient(ch chan Capture) {
+	b.Lock()
+	delete(b.clients, ch)
+	close(ch)
+	b.Unlock()
+}
+
+func (b *sseBroker) publish(c Capture) {
+	b.Lock()
+	for ch := range b.clients {
+		select {
+		case ch <- c:
+		default:
+			// drop if client is slow
+		}
+	}
+	b.Unlock()
+}
+
+// generateCA returns both:
+// - parsedCert: *x509.Certificate  (suitable for goproxy.GoproxyCa)
+// - parsedKey:  *rsa.PrivateKey    (suitable for goproxy.GoproxyCaKey)
+// - certPEM, keyPEM []byte         (PEM bytes, useful to build tls.Certificate)
+func generateCA() (parsedCert *x509.Certificate, parsedKey *rsa.PrivateKey, certPEM, keyPEM []byte, err error) {
+	// generate key
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	// create certificate template
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	tpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			Organization: []string{"Example MITM CA"},
+			CommonName:   "Example MITM CA",
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		MaxPathLen:            1,
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &priv.PublicKey, priv)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	parsed, err := x509.ParseCertificate(derBytes)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	// pem encode cert and key
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+
+	return parsed, priv, certPEM, keyPEM, nil
+}
+
+// call this before starting the proxy server
+func enableMITM(proxy *goproxy.ProxyHttpServer, persist bool, dir string) error {
+	// Load or generate an X.509 CA (your existing helpers are fine)
+	var (
+		caX509 *x509.Certificate
+		caKey  *rsa.PrivateKey
+		err    error
+	)
+	if persist {
+		caX509, caKey, err = loadOrCreateCA(filepath.Join(dir, "ca.pem"), filepath.Join(dir, "ca.key"))
+	} else {
+		caX509, caKey, err = createEphemeralCA()
+	}
+	if err != nil {
+		return err
+	}
+
+	// Build a tls.Certificate (this is what the current API expects)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caX509.Raw})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(caKey)})
+
+	caPair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to build tls cert pair: %w", err)
+	}
+
+	// Create a TLS config generator from the CA pair
+	tlsFromCA := goproxy.TLSConfigFromCA(&caPair) // returns func(host, ctx) (*tls.Config, error)
+
+	// Instruct goproxy to MITM CONNECT using our CA
+	proxy.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(
+		func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+			return &goproxy.ConnectAction{
+				Action:    goproxy.ConnectMitm,
+				TLSConfig: tlsFromCA,
+			}, host
+		},
+	))
+
+	// Upstream transport: we usually skip verification since we’re intercepting
+	proxy.Tr = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	return nil
+}
+
+func loadOrCreateCA(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKey, error) {
+	// Try to load
+	if cert, key, err := loadCA(certPath, keyPath); err == nil {
+		return cert, key, nil
+	}
+	// Create and persist
+	cert, key, err := createEphemeralCA()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := saveCA(cert, key, certPath, keyPath); err != nil {
+		return nil, nil, err
+	}
+	return cert, key, nil
+}
+
+func loadCA(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKey, error) {
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	cb, _ := pem.Decode(certPEM)
+	if cb == nil || cb.Type != "CERTIFICATE" {
+		return nil, nil, errors.New("invalid CA cert PEM")
+	}
+	kb, _ := pem.Decode(keyPEM)
+	if kb == nil || (kb.Type != "RSA PRIVATE KEY" && kb.Type != "PRIVATE KEY") {
+		return nil, nil, errors.New("invalid CA key PEM")
+	}
+	cert, err := x509.ParseCertificate(cb.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	var key *rsa.PrivateKey
+	if kb.Type == "RSA PRIVATE KEY" {
+		key, err = x509.ParsePKCS1PrivateKey(kb.Bytes)
+	} else {
+		// If you later switch to PKCS8, add x509.ParsePKCS8PrivateKey here.
+		return nil, nil, errors.New("unsupported private key format")
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return cert, key, nil
+}
+
+func saveCA(cert *x509.Certificate, key *rsa.PrivateKey, certPath, keyPath string) error {
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
+		return err
+	}
+	certOut := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+	keyOut := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	if err := os.WriteFile(certPath, certOut, fs.FileMode(0o644)); err != nil {
+		return err
+	}
+	if err := os.WriteFile(keyPath, keyOut, fs.FileMode(0o600)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func createEphemeralCA() (*x509.Certificate, *rsa.PrivateKey, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		return nil, nil, err
+	}
+	tpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			Organization: []string{"Go MITM Proxy CA"},
+			CommonName:   "Go MITM Proxy CA",
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		MaxPathLen:            2,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cert, key, nil
+}
+
+// --- end MITM initialization --------------------------------------------------
+
+func main() {
+	var listen = flag.String("listen", "127.0.0.1:8080", "single address for both proxy and UI")
+	var mitm = flag.Bool("mitm", true, "enable HTTPS MITM (requires installing CA in clients)")
+	flag.Parse()
+
+	store := newCaptureStore(maxStoredEntries)
+	broker := newSseBroker()
+
+	// Build handlers but do NOT start additional servers.
+	uiHandler := buildUIHandler(store, broker)
+	proxyHandler := buildProxyHandler(*mitm, store, broker)
+
+	// Combined handler: route proxy-style requests to proxy; everything else to UI
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Proxy requests are either CONNECT or have an absolute URL (non-empty scheme).
+		if r.Method == http.MethodConnect || (r.URL != nil && r.URL.Scheme != "") {
+			proxyHandler.ServeHTTP(w, r)
+			return
+		}
+		// Otherwise treat as UI/API/SSE/static request
+		uiHandler.ServeHTTP(w, r)
+	})
+
+	log.Printf("Listening on %s for both Proxy and UI (UI at http://%s/)", *listen, *listen)
+	log.Fatal(http.ListenAndServe(*listen, handler))
+}
+
+// buildUIHandler returns the mux for UI, REST, SSE, and static files.
+func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/api/captures", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		list := store.list()
+		log.Printf("request /api/captures: %v", list)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(list)
+	})
+
+	mux.HandleFunc("/api/captures/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		const prefix = "/api/captures/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			http.NotFound(w, r)
+			return
+		}
+		idStr := r.URL.Path[len(prefix):]
+		if idStr == "" || strings.Contains(idStr, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		c, ok := store.get(id)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		log.Printf("request /api/captures/%d: %v", id, c)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(c)
+	})
+
+	// SSE events
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		ch := broker.addClient()
+		defer broker.removeClient(ch)
+
+		fmt.Fprintf(w, ": ok\n\n")
+		flusher.Flush()
+
+		notify := r.Context().Done()
+		for {
+			select {
+			case <-notify:
+				return
+			case c, ok := <-ch:
+				if !ok {
+					return
+				}
+				b, _ := json.Marshal(c)
+				fmt.Fprintf(w, "data: %s\n\n", b)
+				flusher.Flush()
+			}
+		}
+	})
+
+	// Static UI from embedded FS at root
+	sub, err := fs.Sub(uiFS, "ui")
+	if err != nil {
+		log.Fatal(err)
+	}
+	mux.Handle("/", http.FileServer(http.FS(sub)))
+
+	return mux
+}
+
+// buildProxyHandler configures and returns the proxy handler.
+func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker) http.Handler {
+	proxy := goproxy.NewProxyHttpServer()
+	proxy.Verbose = false
+
+	// Enable MITM if requested
+	if mitmEnabled {
+		if err := enableMITM(proxy, true, "./ca"); err != nil {
+			log.Fatalf("MITM init failed: %v", err)
+		}
+	} else {
+		log.Println("MITM disabled: HTTPS will be tunneled (opaque bodies).")
+	}
+
+	// Ephemeral map for partial captures
+	var reqMap sync.Map
+
+	// Capture request
+	proxy.OnRequest().DoFunc(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		log.Printf("Request: %s", r.URL.String())
+		start := time.Now()
+
+		reqHeaders := make(map[string][]string, len(r.Header))
+		for k, v := range r.Header {
+			reqHeaders[k] = append([]string(nil), v...)
+		}
+
+		bodyStr, newBody, err := readLimitedBody(r.Body, maxStoredBody)
+		if err != nil {
+			log.Printf("error reading request body: %v", err)
+			bodyStr = "--body-read-error--"
+			newBody = io.NopCloser(bytes.NewReader(nil))
+		}
+		r.Body = newBody
+
+		c := Capture{
+			Time:              time.Now().UTC(),
+			Method:            r.Method,
+			URL:               r.URL.String(),
+			RequestHeaders:    reqHeaders,
+			RequestBodyBase64: bodyStr,
+			Notes:             fmt.Sprintf("pending (captured at %s)", start.Format(time.RFC3339)),
+		}
+
+		ctx.UserData = start
+		reqMap.Store(reqKey(r), c)
+		return r, nil
+	})
+
+	// Capture response
+	proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+		if resp == nil || ctx == nil || ctx.Req == nil {
+			return resp
+		}
+		key := reqKey(ctx.Req)
+		val, ok := reqMap.Load(key)
+		if !ok {
+			return resp
+		}
+		partial := val.(Capture)
+
+		respBodyStr, newRespBody, err := readLimitedBody(resp.Body, maxStoredBody)
+		if err != nil {
+			respBodyStr = "--resp-body-read-error--"
+			newRespBody = io.NopCloser(bytes.NewReader(nil))
+		}
+		resp.Body = newRespBody
+
+		rh := make(map[string][]string, len(resp.Header))
+		for k, v := range resp.Header {
+			rh[k] = append([]string(nil), v...)
+		}
+
+		var durationMs int64
+		if st, ok := ctx.UserData.(time.Time); ok {
+			durationMs = time.Since(st).Milliseconds()
+		}
+
+		partial.ResponseStatus = resp.StatusCode
+		partial.ResponseHeaders = rh
+		partial.ResponseBodyBase64 = respBodyStr
+		partial.DurationMs = durationMs
+		partial.Notes = ""
+
+		stored := store.add(partial)
+		broker.publish(stored)
+		reqMap.Delete(key)
+		log.Printf("Response '%s' Status %s", resp.Request.URL.String(), resp.Status)
+		return resp
+	})
+
+	return proxy
+}
+
+// reqKey returns a stable string key for a request pointer
+func reqKey(r *http.Request) string {
+	return fmt.Sprintf("%p", r)
+}
+
+// generateRootCA generates an in-memory RSA root CA certificate for MITM.
+// Note: This does not persist the CA; for persistent CA, write cert/key to files and reuse.
+func generateRootCA() (*x509.Certificate, *rsa.PrivateKey, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		return nil, nil, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			Organization: []string{"Go MITM Proxy CA"},
+			CommonName:   "Go MITM Proxy CA",
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // 1 year
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		MaxPathLen:            1,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		return nil, nil, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cert, priv, nil
+}

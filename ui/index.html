@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Proxy Capture — Inspector</title>
+    <style>
+        :root{
+            --accent:#1f6feb;
+            --muted:#6b7280;
+            --bg:#0f1720;
+            --card:#0b1220;
+            --surface:#0b1220;
+            --text:#e6eef8;
+            --mono: Menlo, Monaco, "Courier New", monospace;
+            --gap:12px;
+        }
+        *{box-sizing:border-box}
+        html,body,#app{height:100%;margin:0;background:linear-gradient(180deg,#071021 0%, #051427 100%);color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+        #app{display:grid;grid-template-columns:360px 1fr;gap:var(--gap);padding:16px;height:100vh;align-items:stretch}
+
+        /* Left column: list */
+        .panel { background: linear-gradient(180deg,#071526, #052034); border-radius:8px; padding:12px; box-shadow: 0 6px 20px rgba(2,6,23,0.6); overflow:hidden; display:flex; flex-direction:column; }
+        .header { display:flex; align-items:center; gap:8px; margin-bottom:10px }
+        .h-title { font-weight:600; font-size:16px }
+        .search { margin-left:auto; display:flex; gap:8px; align-items:center }
+        .search input { background:transparent;border:1px solid rgba(255,255,255,0.06); padding:8px 10px;border-radius:6px;color:var(--text); min-width:140px }
+        .controls button { background:transparent;border:1px solid rgba(255,255,255,0.06); color:var(--text); padding:8px 10px; border-radius:6px; cursor:pointer }
+        .controls button:hover{border-color:var(--accent)}
+
+        .list { overflow:auto; padding-right:4px; }
+        .row { display:flex; gap:10px; padding:10px; border-radius:6px; align-items:center; cursor:pointer; margin-bottom:6px; }
+        .row:hover{background:rgba(255,255,255,0.02)}
+        .row.selected{ background: linear-gradient(90deg, rgba(31,111,235,0.12), rgba(31,111,235,0.04)); border-left:3px solid var(--accent); padding-left:7px }
+        .row .meta { display:flex; flex-direction:column; min-width:0 }
+        .row .line1 { display:flex; gap:8px; align-items:center; font-size:13px; }
+        .method { font-weight:700; padding:4px 8px; border-radius:4px; font-size:12px; color:#04203b; }
+        .method.GET { background:#9ae6b4; color:#042103 }
+        .method.POST { background:#fbd38d; color:#3a2b00 }
+        .method.PUT { background:#c7b2ff; color:#2b025f }
+        .method.DELETE { background:#fda4af; color:#3b0208 }
+        .path { color:var(--text); text-overflow:ellipsis; overflow:hidden; white-space:nowrap }
+        .badge { background:rgba(255,255,255,0.04); padding:2px 6px; border-radius:4px; font-size:12px; color:var(--muted) }
+
+        /* Right column: details */
+        .details { display:flex; flex-direction:column; gap:12px; overflow:hidden }
+        .details-top { display:flex; gap:12px; align-items:center; justify-content:space-between }
+        .titleLarge { font-size:18px; font-weight:700 }
+        .subMeta { color:var(--muted); font-size:13px }
+        .tabs { display:flex; gap:6px }
+        .tab { padding:8px 10px; border-radius:6px; background:transparent; border:1px solid rgba(255,255,255,0.03); cursor:pointer; color:var(--text) }
+        .tab.active { border-color:var(--accent); box-shadow: 0 6px 18px rgba(31,111,235,0.12) }
+
+        /* content panes */
+        .content { background:linear-gradient(180deg,#071526, #041225); border-radius:8px; padding:12px; overflow:auto; flex:1; }
+        .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 12px; align-items:start; font-size:13px; color:var(--muted) }
+        .kv .k { color:var(--muted); }
+        .headers { margin-top:8px; border-top:1px dashed rgba(255,255,255,0.03); padding-top:8px }
+        .pre { background:#071018; padding:12px; border-radius:6px; font-family:var(--mono); font-size:13px; overflow:auto; white-space:pre-wrap; word-wrap:break-word; color:#dbeafe }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .tab {
+            padding: 6px 12px;
+            border: none;
+            background: #ddd;
+            cursor: pointer;
+        }
+
+        .tab.active {
+            background: #555;
+            color: #fff;
+        }
+
+        .tab-pane {
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+
+        pre {
+            white-space: pre-wrap;      /* wrap long lines */
+            word-break: break-word;
+            font-family: monospace;
+            /*background: #f7f7f7;*/
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            max-height: 500px;
+            overflow: auto;
+        }
+
+        .boxed-text {
+            border: 1px solid #ccc;         /* thin gray border */
+            border-radius: 4px;            /* rounded corners */
+            padding: 10px;                 /* space inside the box */
+            background-color: #f8f8f8;     /* light background */
+            white-space: pre-wrap;         /* preserve formatting but wrap lines */
+            word-break: break-word;        /* break long words */
+            font-family: monospace;        /* good for HTTP bodies or headers */
+            max-height: 400px;             /* optional: limit height */
+            overflow: auto;                /* scroll if too large */
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* small buttons */
+        .row-actions { display:flex; gap:8px }
+        .but { background:transparent; border:1px solid rgba(255,255,255,0.04); padding:6px 8px; border-radius:6px; cursor:pointer }
+        .but:hover{ border-color:var(--accent) }
+
+        /* responsive */
+        @media (max-width:900px){
+            #app{grid-template-columns:1fr; grid-auto-rows: auto; padding:10px}
+            .panel{margin-bottom:12px}
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <div class="panel" aria-label="capture-list">
+        <div class="header">
+            <div class="h-title">Captures</div>
+            <div class="search">
+                <input id="filterInput" placeholder="filter by path, host, status..." />
+                <div class="controls">
+                    <button id="clearBtn" class="but" title="Clear list">Clear</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="list" class="list" tabindex="0" aria-label="capture-list-rows">
+            <!-- rows inserted dynamically -->
+        </div>
+        <div style="margin-top:8px;color:var(--muted);font-size:12px">Live — new captures appear at top. Keyboard: / focus search • ↑/↓ select • d download</div>
+    </div>
+
+    <div class="details">
+        <div class="details-top">
+            <div>
+                <div id="titleLarge" class="titleLarge">No capture selected</div>
+                <div id="subMeta" class="subMeta">Select a request on the left to view details</div>
+            </div>
+            <div class="row-actions">
+                <button id="copyBtn" class="but" title="Copy raw JSON">Copy</button>
+                <button id="downloadBtn" class="but" title="Download capture JSON">Download</button>
+                <button id="openRawBtn" class="but" title="Open raw in new tab">Open Raw</button>
+            </div>
+        </div>
+
+        <div class="tabs" role="tablist">
+            <button class="tab" data-tab="overview">Overview</button>
+            <button class="tab" data-tab="request">Request</button>
+            <button class="tab" data-tab="response">Response</button>
+            <button class="tab" data-tab="raw">Raw</button>
+        </div>
+
+        <div id="tab-overview" class="tab-pane">
+            <div id="content" class="content" role="main">
+            <div id="pane-overview" class="pane">
+                <div class="kv">
+                    <div class="k">Method</div><div id="ov-method">-</div>
+                    <div class="k">URL</div><div id="ov-url">-</div>
+                    <div class="k">Status</div><div id="ov-status">-</div>
+                    <div class="k">Duration</div><div id="ov-duration">-</div>
+                    <div class="k">Time</div><div id="ov-time">-</div>
+                </div>
+
+                <div class="headers">
+                    <h4 style="margin:8px 0 6px 0">Request Headers</h4>
+                    <div id="ov-req-headers"></div>
+
+                    <h4 style="margin:8px 0 6px 0">Request Body</h4>
+                    <div id="ov-req-body" class="boxed-text"></div>
+
+                    <h4 style="margin:12px 0 6px 0">Response Headers</h4>
+                    <div id="ov-resp-headers"></div>
+
+                    <h4 style="margin:8px 0 6px 0">Response Body</h4>
+                    <div id="ov-resp-body" class="boxed-text"></div>
+                </div>
+            </div>
+
+        </div>
+        </div>
+        <div id="tab-request" class="tab-pane" style="display:none">
+            <pre id="req-body"></pre>
+        </div>
+        <div id="tab-response" class="tab-pane" style="display:none">
+            <pre id="resp-body"></pre>
+        </div>
+        <div id="tab-raw" class="tab-pane" style="display:none">
+            <pre id="rawJson"></pre>
+        </div>
+    </div>
+</div>
+
+<script src="app.js" defer></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</body>
+</html>
