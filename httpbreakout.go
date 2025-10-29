@@ -196,6 +196,17 @@ func (s *captureStore) populateFromSlice(list []Capture) {
 	}
 }
 
+func (s *captureStore) clear() {
+	s.Lock()
+	defer s.Unlock()
+	for i := range s.buf {
+		var zero Capture
+		s.buf[i] = zero
+	}
+	s.count = 0
+	s.next = 0
+}
+
 // small helper: read up to N bytes and return as string (base64 would be safer for arbitrary bytes).
 func readLimitedBody(r io.ReadCloser, max int) (string, io.ReadCloser, error) {
 	if r == nil {
@@ -515,15 +526,32 @@ func main() {
 func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
 	mux := http.NewServeMux()
 
+	// /api/captures  (list + clear)
 	mux.HandleFunc("/api/captures", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method", http.StatusMethodNotAllowed)
+		switch r.Method {
+		case http.MethodGet:
+			list := store.list()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(list)
+			return
+
+		case http.MethodDelete:
+			// wipe the buffer
+			store.clear()
+			broker.publish(Capture{Time: time.Now().UTC(), Notes: "cleared"})
+			// optional: persist immediately (if you added persistence helpers)
+			// _ = saveCapturesToFile("./captures.json", store.list())
+
+			// optional: broadcast a “cleared” event over SSE
+			// broker.publish(Capture{Time: time.Now().UTC(), Notes: "cleared"})
+
+			w.WriteHeader(http.StatusNoContent)
+			return
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		list := store.list()
-		log.Printf("request /api/captures: %v", list)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(list)
 	})
 
 	mux.HandleFunc("/api/captures/", func(w http.ResponseWriter, r *http.Request) {

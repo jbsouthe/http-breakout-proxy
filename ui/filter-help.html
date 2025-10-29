@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>Filter Syntax Reference</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <style>
+        :root{
+            --accent:#1f6feb;
+            --muted:#9aa4b2;
+            --bg:#0f1720;
+            --surface:#071526;
+            --surface2:#041225;
+            --text:#e6eef8;
+            --mono: Menlo, Monaco, "Courier New", monospace;
+        }
+        *{box-sizing:border-box}
+        html,body{height:100%;margin:0;background:linear-gradient(180deg,#071021 0%, #051427 100%);color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+        .wrap{max-width:980px;margin:24px auto;padding:0 16px}
+        h1{font-size:28px;margin:0 0 8px 0}
+        h2{font-size:20px;margin:20px 0 8px 0}
+        p{line-height:1.6;color:var(--muted)}
+        .card{background:linear-gradient(180deg, var(--surface), var(--surface2));border:1px solid rgba(255,255,255,0.06);border-radius:10px;box-shadow:0 8px 24px rgba(2,6,23,0.6);padding:16px;margin-top:12px}
+        code{font-family:var(--mono);background:rgba(255,255,255,0.08);padding:2px 4px;border-radius:4px}
+        table{width:100%;border-collapse:collapse;margin-top:8px}
+        th, td{padding:8px;border:1px solid rgba(255,255,255,0.08);font-size:13px;vertical-align:top}
+        th{background:rgba(255,255,255,0.06);text-align:left}
+        .note{font-size:12px;color:var(--muted);margin-top:10px}
+        .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+        .btn{background:transparent;border:1px solid rgba(255,255,255,0.12);color:var(--text);padding:8px 10px;border-radius:6px;cursor:pointer;text-decoration:none}
+        .btn:hover{border-color:var(--accent)}
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="toolbar">
+        <a class="btn" href="/" title="Back to app">← Back to Inspector</a>
+    </div>
+
+    <h1>🔍 Filter Syntax Reference</h1>
+    <div class="card">
+        <p>
+            The search bar accepts free text, field-prefixed terms, and JavaScript-style regular expressions.
+            Multiple terms are <b>AND-combined</b> (all must match).
+        </p>
+        <ul>
+            <li><b>Plain text</b> matches anywhere: URL, method, status, host, request/response headers, request/response bodies.</li>
+            <li><b>Prefixed terms</b> constrain scope (e.g., <code>method:</code>, <code>status:</code>, <code>host:</code>, <code>url:</code>, <code>body:</code>, <code>req.body:</code>, <code>resp.body:</code>, <code>header:</code>, <code>req.header:</code>, <code>resp.header:</code>).</li>
+            <li><b>Regex</b> uses <code>/pattern/flags</code> (e.g., <code>/token/i</code>). Flags like <code>i</code>, <code>m</code>, <code>g</code> are supported.</li>
+        </ul>
+    </div>
+
+    <h2>Basic Examples</h2>
+    <div class="card">
+        <table>
+            <thead>
+            <tr><th>Term</th><th>Matches</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>login</code></td><td>Anywhere in URL, headers, or bodies</td></tr>
+            <tr><td><code>/bearer\s+[A-Za-z0-9._-]+/i</code></td><td>Regex across all text fields</td></tr>
+            <tr><td><code>status:4</code></td><td>Any 4xx response class</td></tr>
+            <tr><td><code>status:404</code></td><td>Exact 404</td></tr>
+            <tr><td><code>method:POST</code></td><td>HTTP POST only</td></tr>
+            <tr><td><code>host:api.example.com</code></td><td>Requests to that host</td></tr>
+            <tr><td><code>url:/auth/login</code></td><td>URL contains the segment</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <h2>Bodies</h2>
+    <div class="card">
+        <table>
+            <tbody>
+            <tr><td style="width:40%"><code>body:token</code></td><td>Request <i>or</i> response body contains “token”</td></tr>
+            <tr><td><code>req.body:password</code></td><td>Request body contains “password”</td></tr>
+            <tr><td><code>resp.body:/\"error\"\s*:/i</code></td><td>Regex for JSON key “error” in response body</td></tr>
+            <tr><td><code>body:/\"success\"\s*:\s*true/i</code></td><td>Regex for JSON <code>"success": true</code> in any body</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <h2>Headers</h2>
+    <div class="card">
+        <p class="note">
+            Header terms accept optional <code>=value</code>; either side may be a regex.
+            Examples below match on header <b>name</b> and/or <b>value</b>.
+        </p>
+        <table>
+            <tbody>
+            <tr><td style="width:40%"><code>header:authorization</code></td><td>Header name or value containing “authorization” on request <i>or</i> response</td></tr>
+            <tr><td><code>req.header:authorization=bearer</code></td><td>Request header “Authorization” contains “bearer”</td></tr>
+            <tr><td><code>resp.header:content-type=application/json</code></td><td>Response Content-Type is JSON</td></tr>
+            <tr><td><code>header:/^x-/i=/trace/i</code></td><td>Regex on header name (starts with <code>x-</code>) and value (contains “trace”)</td></tr>
+            <tr><td><code>req.header:^x-trace-id=/^[0-9a-f-]+$/i</code></td><td>Request header <code>X-Trace-Id</code> with hex-like value</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <h2>Advanced Regex</h2>
+    <div class="card">
+        <table>
+            <tbody>
+            <tr><td style="width:40%"><code>/token\s*[:=]\s*\S+/i</code></td><td>“token = …” in any searchable field</td></tr>
+            <tr><td><code>host:/^api\./i</code></td><td>Host starts with “api.”</td></tr>
+            <tr><td><code>url:/\.(png|jpg|gif)$/i</code></td><td>Image URLs</td></tr>
+            <tr><td><code>method:/^po(st)?$/i</code></td><td>POST variants via regex</td></tr>
+            <tr><td><code>status:/^(?:4|5)\d\d$/</code></td><td>Any 4xx or 5xx via regex</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <h2>Combining Terms (AND)</h2>
+    <div class="card">
+        <table>
+            <tbody>
+            <tr><td style="width:40%"><code>method:POST status:2 host:api.example.com</code></td><td>All constraints must match</td></tr>
+            <tr><td><code>login status:401</code></td><td>“login” present and HTTP 401</td></tr>
+            <tr><td><code>/error/i /timeout/i</code></td><td>Both regexes must match somewhere</td></tr>
+            </tbody>
+        </table>
+        <p class="note">
+            To switch to OR semantics, change the implementation from <code>terms.every(...)</code> to <code>terms.some(...)</code> in your <code>renderList()</code>.
+        </p>
+    </div>
+
+    <div class="card">
+        <p class="note">
+            Tip: Regex is parsed from terms of the form <code>/pattern/flags</code>. Example flags: <code>i</code> (case-insensitive), <code>m</code> (multiline).
+        </p>
+    </div>
+</div>
+</body>
+</html>

@@ -1,5 +1,6 @@
 let captures = [];   // newest-first
 let selectedId = null;
+let filterText = '';
 
 const API_LIST = '/api/captures';
 const API_GET  = (id) => `/api/captures/${id}`;
@@ -36,11 +37,21 @@ function setupTabs() {
 }
 
 function bindUI() {
+    function debounce(fn, ms=120){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+
     const filterInput = document.getElementById('filterInput');
     if (filterInput) {
-        filterInput.addEventListener('input', () => renderList());
+        filterInput.addEventListener('input', debounce((e) => {
+            filterText = (e.target.value || '').trim().toLowerCase();
+            renderList();
+        }, 120));
     }
-    // bind other buttons/handlers here...
+
+    const clearBtn = document.getElementById('clearBtn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearAllCaptures);
+    }
+
 }
 
 async function loadInitial() {
@@ -80,6 +91,14 @@ function startSSE() {
     es.onmessage = function(e){
         try {
             const c = JSON.parse(e.data);
+
+            if (c.notes === 'cleared') {
+                captures = [];
+                selectedId = null;
+                blankDetails();
+                renderList();
+                return;
+            }
 
             if (c.deleted) {
                 // remove from local list
@@ -125,9 +144,91 @@ function renderList() {
     const list = document.getElementById('list');
     if (!list) return;
     list.innerHTML = '';
-    (captures || []).slice(0, 1000).forEach(c => {
+
+    const query = (filterText || '').trim();
+    const terms = query.split(/\s+/).filter(Boolean);
+
+    const filtered = !query ? captures : captures.filter(c => {
+        // Canonical fields (keep originals for regex; add lowercased fast paths when needed)
+        const url     = c.url || '';
+        const method  = c.method || '';
+        const statusS = String(c.response_status ?? '');
+        const host    = (() => { try { return new URL(c.url).host; } catch { return ''; } })();
+
+        const reqBody  = c.request_body  || '';
+        const respBody = c.response_body || '';
+
+        const reqHdrPairs  = headersToPairs(c.request_headers);
+        const respHdrPairs = headersToPairs(c.response_headers);
+
+        return terms.every(term => {
+            // keyed operators (method:, status:, host:, url:)
+            if (term.startsWith('method:')) {
+                const q = parseMaybeRegex(term.slice(7));
+                return matches(method, q);
+            }
+            if (term.startsWith('status:')) {
+                const spec = term.slice(7).toLowerCase();
+                // class (e.g., "4" → any 4xx) vs. exact (e.g., "404")
+                if (/^[1-5]$/.test(spec)) return statusS.startsWith(spec);
+                const q = parseMaybeRegex(spec);
+                return matches(statusS, q);
+            }
+            if (term.startsWith('host:')) {
+                const q = parseMaybeRegex(term.slice(5));
+                return matches(host, q);
+            }
+            if (term.startsWith('url:')) {
+                const q = parseMaybeRegex(term.slice(4));
+                return matches(url, q);
+            }
+
+            // bodies (req/resp or combined)
+            if (term.startsWith('body:')) {
+                const q = parseMaybeRegex(term.slice(5));
+                return matches(reqBody, q) || matches(respBody, q);
+            }
+            if (term.startsWith('req.body:')) {
+                const q = parseMaybeRegex(term.slice(9));
+                return matches(reqBody, q);
+            }
+            if (term.startsWith('resp.body:')) {
+                const q = parseMaybeRegex(term.slice(10));
+                return matches(respBody, q);
+            }
+
+            // headers (req/resp or combined). Support name=value with regex on each side.
+            if (term.startsWith('header:')) {
+                const { nameQ, valueQ } = parseHeaderSpec(term.slice(7));
+                return matchHeaderTerm(reqHdrPairs, nameQ, valueQ) || matchHeaderTerm(respHdrPairs, nameQ, valueQ);
+            }
+            if (term.startsWith('req.header:')) {
+                const { nameQ, valueQ } = parseHeaderSpec(term.slice(11));
+                return matchHeaderTerm(reqHdrPairs, nameQ, valueQ);
+            }
+            if (term.startsWith('resp.header:')) {
+                const { nameQ, valueQ } = parseHeaderSpec(term.slice(12));
+                return matchHeaderTerm(respHdrPairs, nameQ, valueQ);
+            }
+
+            // DEFAULT TERM: search *everywhere* (broad, but efficient)
+            const q = parseMaybeRegex(term);
+            // Cheap scalars first
+            if (matches(url, q) || matches(method, q) || matches(statusS, q) || matches(host, q)) return true;
+            if (matches(reqBody, q) || matches(respBody, q)) return true;
+            // Headers: names and values
+            if (matchHeaderTerm(reqHdrPairs, q, null)) return true;
+            if (matchHeaderTerm(reqHdrPairs, null, q)) return true;
+            if (matchHeaderTerm(respHdrPairs, q, null)) return true;
+            if (matchHeaderTerm(respHdrPairs, null, q)) return true;
+
+            return false;
+        });
+    });
+
+    filtered.slice(0, 1000).forEach(c => {
         const row = document.createElement('div');
-        row.className = 'row';
+        row.className = 'row' + (c.id === selectedId ? ' selected' : '');
         row.textContent = `${c.method} ${c.url} [${c.response_status ?? '-'}]`;
         row.onclick = () => selectCapture(c.id);
         list.appendChild(row);
@@ -161,22 +262,25 @@ function renderHeaders(container, headers) {
 
 function escapeHtml(s){ return s==null ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-// --- REPLACE your selectCapture + renderDetails with these:
-
 async function selectCapture(id) {
     selectedId = id;
-    console.log('[UI] selectCapture', id);
     try {
         const r = await fetch(`/api/captures/${id}`);
+        if (r.status === 404) {
+            // stale selection after clear or deletion
+            selectedId = null;
+            blankDetails();
+            renderList();
+            return;
+        }
         if (!r.ok) {
-            console.error('[UI] fetch capture failed', r.status, r.statusText);
+            console.error('fetch capture failed', r.status, r.statusText);
             return;
         }
         const c = await r.json();
-        console.log('[UI] capture', c);
         renderDetails(c);
     } catch (e) {
-        console.error('[UI] selectCapture error', e);
+        console.error('selectCapture error', e);
     }
 }
 
@@ -287,7 +391,7 @@ async function deleteCapture(id, { confirmFirst = true } = {}) {
                     // choose neighbor or clear
                     if (captures.length === 0) {
                         selectedId = null;
-                        clearDetails();
+                        blankDetails();
                         renderList();
                     } else {
                         selectNeighborAfterRemoval(idx);
@@ -314,23 +418,10 @@ async function deleteCapture(id, { confirmFirst = true } = {}) {
     }
 }
 
-function clearDetails() {
-    const t = document.getElementById('titleLarge');
-    const s = document.getElementById('subMeta');
-    const rb = document.getElementById('req-body');
-    const sb = document.getElementById('resp-body');
-    const raw = document.getElementById('rawJson');
-    if (t) t.textContent = 'No capture selected';
-    if (s) s.textContent = '';
-    if (rb) rb.textContent = '';
-    if (sb) sb.textContent = '';
-    if (raw) raw.textContent = '';
-}
-
 function selectNeighborAfterRemoval(idxRemoved) {
     if (!Array.isArray(captures) || captures.length === 0) {
         selectedId = null;
-        clearDetails();
+        blankDetails();
         renderList();
         return;
     }
@@ -347,6 +438,80 @@ function selectNeighborAfterRemoval(idxRemoved) {
     selectedId = prevId;
     renderList();
     selectCapture(prevId);
+}
+
+async function clearAllCaptures() {
+    if (!confirm('Clear ALL captures? This cannot be undone.')) return;
+    try {
+        const res = await fetch('/api/captures', { method: 'DELETE' });
+        if (res.status === 204) {
+            captures = [];
+            selectedId = null;
+            blankDetails();   // <- blank the right panel
+            renderList();     // <- remove selection highlight
+        } else {
+            alert(`Clear failed: ${res.status} ${res.statusText}`);
+        }
+    } catch (e) {
+        console.error('clear error', e);
+        alert(`Clear error: ${e}`);
+    }
+}
+
+// --- Filtering helpers -------------------------------------------------------
+function toLowerSafe(s){ return (s == null ? '' : String(s)).toLowerCase(); }
+
+function headersToPairs(obj) {
+    // obj: { "Header-Name": ["v1","v2"], ... }
+    const pairs = [];
+    if (obj && typeof obj === 'object') {
+        for (const k of Object.keys(obj)) {
+            const vs = Array.isArray(obj[k]) ? obj[k] : [obj[k]];
+            pairs.push([String(k), String(vs.join(', '))]); // keep original case for regex
+        }
+    }
+    return pairs; // array of [name, values]
+}
+
+// /pattern/flags  ->  { regex: /pattern/flags }
+// other           ->  { text: 'lowercased text' }
+function parseMaybeRegex(term) {
+    const m = term.match(/^\/(.*)\/(\w*)$/);
+    if (m) {
+        try { return { regex: new RegExp(m[1], m[2]) }; }
+        catch { /* fall through to text */ }
+    }
+    return { text: term.toLowerCase() };
+}
+
+function matches(hay, q) {
+    if (hay == null) return false;
+    const s = String(hay);
+    if (q.regex) return q.regex.test(s);
+    return s.toLowerCase().includes(q.text);
+}
+
+// nameQuery/valueQuery can be regex or text-query objects from parseMaybeRegex()
+function matchHeaderTerm(pairs, nameQuery, valueQuery) {
+    for (const [k, v] of pairs) {
+        const okName  = !nameQuery  || matches(k, nameQuery);
+        const okValue = !valueQuery || matches(v, valueQuery);
+        if (okName && okValue) return true;
+    }
+    return false;
+}
+
+// Parse header spec with optional "=value", returning {nameQ, valueQ}
+// Supports regex on either side:   header:/^x-/i=/trace/i
+function parseHeaderSpec(spec) {
+    if (!spec) return { nameQ: null, valueQ: null };
+    const eq = spec.indexOf('=');
+    if (eq === -1) {
+        return { nameQ: parseMaybeRegex(spec), valueQ: null };
+    }
+    const name  = spec.slice(0, eq);
+    const value = spec.slice(eq + 1);
+    return { nameQ: parseMaybeRegex(name), valueQ: parseMaybeRegex(value) };
 }
 
 // If you used <script defer>, either:
