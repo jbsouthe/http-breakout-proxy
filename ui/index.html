@@ -78,10 +78,38 @@
         .controls button:hover{border-color:var(--accent)}
 
         .list { overflow:auto; padding-right:4px; }
-        .row { display:flex; gap:10px; padding:10px; border-radius:6px; align-items:center; cursor:pointer; margin-bottom:6px; }
-        .row:hover{background:rgba(255,255,255,0.02)}
-        .row.selected{ background: linear-gradient(90deg, rgba(31,111,235,0.12), rgba(31,111,235,0.04)); border-left:3px solid var(--accent); padding-left:7px }
-        .row .meta { display:flex; flex-direction:column; min-width:0 }
+        /* base row */
+        .row {
+            position: relative;
+            display: flex;
+            gap: 10px;
+            padding: 10px;
+            border-radius: 8px;
+            align-items: center;
+            cursor: pointer;
+            margin-bottom: 6px;
+            border: 1px solid transparent;         /* <- important: baseline border to avoid layout shift */
+        }
+
+        /* hover shouldn’t erase the selection border */
+        .row:hover {
+            background: rgba(255,255,255,0.03);
+        }
+
+        /* selected: solid visual box + subtle glow */
+        .row.selected {
+            background: linear-gradient(90deg, rgba(31,111,235,0.10), rgba(31,111,235,0.04));
+            border-color: var(--accent);
+            box-shadow:
+                    0 0 0 1px rgba(31,111,235,0.45) inset,
+                    0 0 0 2px rgba(31,111,235,0.15);      /* outer glow */
+        }
+
+        /* keyboard focus ring complements selection without overriding it */
+        .row:focus-visible {
+            outline: 2px solid rgba(31,111,235,0.75);
+            outline-offset: 2px;
+        }.row .meta { display:flex; flex-direction:column; min-width:0 }
         .row .line1 { display:flex; gap:8px; align-items:center; font-size:13px; }
         .method { font-weight:700; padding:4px 8px; border-radius:4px; font-size:12px; color:#04203b; }
         .method.GET { background:#9ae6b4; color:#042103 }

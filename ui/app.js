@@ -252,9 +252,15 @@ function renderList() {
 
     filtered.slice(0, 1000).forEach(c => {
         const row = document.createElement('div');
-        row.className = 'row' + (c.id === selectedId ? ' selected' : '');
+        row.className = 'row' + (c.id === selectedId ? '.selected' : '');
+        row.setAttribute('data-id', String(c.id));
+        row.setAttribute('role', 'option');            // a11y
+        row.setAttribute('aria-selected', c.id === selectedId ? 'true' : 'false');
         row.textContent = `${c.method} ${c.url} [${c.response_status ?? '-'}]`;
         row.onclick = () => selectCapture(c.id);
+        row.tabIndex = 0;
+        row.addEventListener('keydown', e => { if (e.key === 'Enter') selectCapture(c.id); });
+
         list.appendChild(row);
     });
 }
@@ -303,9 +309,20 @@ async function selectCapture(id) {
         }
         const c = await r.json();
         renderDetails(c);
+        updateRowSelectionHighlight();
     } catch (e) {
         console.error('selectCapture error', e);
     }
+}
+
+function updateRowSelectionHighlight() {
+    const rows = document.querySelectorAll('#list .row');
+    rows.forEach(el => {
+        const id = Number(el.getAttribute('data-id'));
+        const selected = id === selectedId;
+        el.classList.toggle('selected', selected);
+        el.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
 }
 
 const STATUS_TEXT = {
