@@ -150,6 +150,13 @@ function startSSE() {
                 return;
             }
 
+            const existingIdx = captures.findIndex(x => x.id === c.id);
+            if (existingIdx >= 0) {
+                captures[existingIdx] = { ...captures[existingIdx], ...c };
+                renderList();
+                if (selectedId === c.id) renderDetails(captures[existingIdx]);
+                return;
+            }
             // normal new-capture event
             captures = captures || [];
             captures.unshift(c);
@@ -252,11 +259,14 @@ function renderList() {
 
     filtered.slice(0, 1000).forEach(c => {
         const row = document.createElement('div');
-        row.className = 'row' + (c.id === selectedId ? '.selected' : '');
+        row.className = 'row' + (c.id === selectedId ? ' selected' : '');
         row.setAttribute('data-id', String(c.id));
         row.setAttribute('role', 'option');            // a11y
         row.setAttribute('aria-selected', c.id === selectedId ? 'true' : 'false');
-        row.textContent = `${c.method} ${c.url} [${c.response_status ?? '-'}]`;
+        const display = c.name && c.name.trim()
+            ? c.name
+            : `${c.method} ${c.url} [${c.response_status ?? '-'}]`;
+        row.textContent = display;
         row.onclick = () => selectCapture(c.id);
         row.tabIndex = 0;
         row.addEventListener('keydown', e => { if (e.key === 'Enter') selectCapture(c.id); });
@@ -373,6 +383,75 @@ function renderDetails(c) {
     const ovDuration = document.getElementById('ov-duration');
     const ovTime = document.getElementById('ov-time');
     const deleteBtn = document.getElementById('deleteBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    if (downloadBtn) {
+        downloadBtn.onclick = () => downloadResponseBody(c);
+    }
+    const renameBtn = document.getElementById('renameBtn');
+    if (renameBtn) {
+        renameBtn.onclick = async () => {
+            const current = (c.name && c.name.trim())
+                ? c.name
+                : `${c.method} ${c.url} [${c.response_status ?? '-'}]`;
+            const next = window.prompt('New name for this capture:', current);
+            if (next == null) return; // cancelled
+            const trimmed = next.trim();
+
+            try {
+                const r = await fetch(`/api/captures/${c.id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: trimmed })
+                });
+                if (!r.ok) { alert(`Rename failed: ${r.status} ${r.statusText}`); return; }
+                const updated = await r.json();
+
+                // update local state
+                const idx = captures.findIndex(x => x.id === updated.id);
+                if (idx >= 0) captures[idx] = updated;
+
+                renderDetails(updated);
+                renderList();
+                updateRowSelectionHighlight();
+            } catch (e) {
+                console.error('rename error', e);
+                alert('Rename error: ' + e);
+            }
+        };
+    }
+
+    const copyCurlBtn = document.getElementById('copyCurlBtn');
+    if (copyCurlBtn) {
+        copyCurlBtn.textContent = 'Copy cURL';
+        copyCurlBtn.title = 'Copy a curl command for this request';
+        copyCurlBtn.onclick = async () => {
+            try {
+                const curl = buildCurlFromCapture(c);
+                await navigator.clipboard.writeText(curl);
+                // optional: brief visual feedback
+                copyCurlBtn.textContent = 'Copied!';
+                setTimeout(() => { copyCurlBtn.textContent = 'Copy cURL'; }, 900);
+            } catch (e) {
+                console.error('clipboard error', e);
+                alert('Failed to copy to clipboard. See console for details.');
+            }
+        };
+    }
+
+    const copyPythonBtn = document.getElementById('copyPythonBtn');
+    if (copyPythonBtn) {
+        copyPythonBtn.onclick = async () => {
+            try {
+                const py = buildPythonFromCapture(c);
+                await navigator.clipboard.writeText(py);
+                copyPythonBtn.textContent = 'Copied!';
+                setTimeout(() => { copyPythonBtn.textContent = 'Copy Python'; }, 900);
+            } catch (e) {
+                console.error('clipboard error', e);
+                alert('Failed to copy Python snippet.');
+            }
+        };
+    }
 
     // Assert DOM presence
     if (!title || !sub || !reqHdrEl || !respHdrEl || !reqBodyEl || !respBodyEl || !rawEl || !ovMethod || !ovURL || !ovStatus || !ovDuration || !ovTime) {
@@ -381,7 +460,10 @@ function renderDetails(c) {
         return;
     }
 
-    title.textContent = `${method || ''} ${url || ''}`;
+    const displayName = (c.name && c.name.trim())
+        ? c.name
+        : `${method || ''} ${url || ''}`;
+    title.textContent = displayName;
     sub.textContent = `Status: ${status ?? '-'} • Duration: ${dur ?? '-'}ms • Captured: ${t ? new Date(t).toLocaleString() : '-'}`;
 
     renderHeaders(reqHdrEl, reqHeaders);
@@ -590,6 +672,136 @@ function updatePauseButtonUI(paused) {
     btn.title = paused ? 'Resume capture' : 'Pause capture';
     // optional styling:
     // btn.classList.toggle('but-danger', paused);
+}
+
+function downloadResponseBody(c) {
+    if (!c || !c.response_body) {
+        alert('No response body to download.');
+        return;
+    }
+
+    let dataStr = c.response_body;
+    let contentType = '';
+
+    // Extract from headers if available
+    try {
+        contentType =
+            (c.response_headers['Content-Type'] ||
+                c.response_headers['content-type'] ||
+                [])[0] || '';
+    } catch { /* ignore */ }
+
+    // Infer a reasonable file extension
+    let ext = 'bin';
+    if (contentType.includes('json')) ext = 'json';
+    else if (contentType.includes('html')) ext = 'html';
+    else if (contentType.includes('xml')) ext = 'xml';
+    else if (contentType.includes('text')) ext = 'txt';
+    else if (contentType.includes('jpeg')) ext = 'jpg';
+    else if (contentType.includes('png')) ext = 'png';
+    else if (contentType.includes('pdf')) ext = 'pdf';
+
+    // Construct blob for download
+    const blob = new Blob([dataStr], { type: contentType || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const filename = `response_${c.id || 'capture'}.${ext}`;
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+function shellQuote(s) {
+    // conservative POSIX single-quote escaping
+    if (s == null) return "''";
+    const str = String(s);
+    if (str === '') return "''";
+    return `'${str.replace(/'/g, `'\\''`)}'`;
+}
+
+function shouldSkipHeader(name) {
+    // hop-by-hop or auto-generated — do not replay
+    const n = String(name).toLowerCase();
+    return n === 'host'
+        || n === 'content-length'
+        || n === 'accept-encoding'
+        || n === 'connection'
+        || n === 'proxy-connection'
+        || n === 'keep-alive'
+        || n === 'transfer-encoding'
+        || n === 'upgrade';
+}
+
+function buildCurlFromCapture(c) {
+    const parts = ['curl', '-i', '-sS']; // show headers, fail loud
+    const method = (c.method || 'GET').toUpperCase();
+
+    if (method !== 'GET') parts.push('-X', shellQuote(method));
+
+    // headers
+    const hdrs = c.request_headers || {};
+    Object.keys(hdrs).forEach((k) => {
+        if (shouldSkipHeader(k)) return;
+        const values = Array.isArray(hdrs[k]) ? hdrs[k] : [hdrs[k]];
+        values.forEach(v => {
+            parts.push('-H', shellQuote(`${k}: ${v}`));
+        });
+    });
+
+    // body (only if present and method typically allows a body)
+    const body = c.request_body || '';
+    const hasBody = body.trim().length > 0 && !/^\s*--truncated--\s*$/i.test(body);
+    if (hasBody && !['GET','HEAD'].includes(method)) {
+        // Use --data-binary to preserve bytes; server-side capture is text so this is best-effort
+        parts.push('--data-binary', shellQuote(body));
+    }
+
+    // URL last
+    parts.push(shellQuote(c.url || ''));
+
+    // pretty multiline render
+    let out = '';
+    for (let i = 0; i < parts.length; i++) {
+        out += (i === 0 ? '' : ' \\\n  ') + parts[i];
+    }
+    return out;
+}
+
+function buildPythonFromCapture(c) {
+    const method = (c.method || 'GET').toUpperCase();
+    const url = c.url || '';
+    const headers = c.request_headers || {};
+    const body = c.request_body || '';
+
+    // format headers
+    const headerLines = Object.keys(headers)
+        .filter(k => !shouldSkipHeader(k))
+        .map(k => {
+            const v = Array.isArray(headers[k]) ? headers[k][0] : headers[k];
+            return `    ${JSON.stringify(k)}: ${JSON.stringify(v)},`;
+        })
+        .join('\n');
+
+    const lines = [];
+    lines.push('import requests');
+    lines.push('');
+    lines.push(`url = ${JSON.stringify(url)}`);
+    if (headerLines) lines.push('headers = {\n' + headerLines + '\n}');
+    if (body.trim()) lines.push(`data = ${JSON.stringify(body)}`);
+    lines.push('');
+    let req = `response = requests.${method.toLowerCase()}(url`;
+    if (headerLines) req += ', headers=headers';
+    if (body.trim()) req += ', data=data';
+    req += ')';
+    lines.push(req);
+    lines.push('');
+    lines.push('print(response.status_code)');
+    lines.push('print(response.text)');
+    return lines.join('\n');
 }
 
 // If you used <script defer>, either:

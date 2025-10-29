@@ -44,6 +44,7 @@ const (
 // Capture represents a single proxied transaction (request + response)
 type Capture struct {
 	ID                 int64               `json:"id"`
+	Name               string              `json:"name,omitempty"`
 	Time               time.Time           `json:"time"`
 	Method             string              `json:"method"`
 	URL                string              `json:"url"`
@@ -602,6 +603,26 @@ func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 
+		case http.MethodPatch:
+			var payload struct {
+				Name *string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Name == nil {
+				http.Error(w, "bad payload", http.StatusBadRequest)
+				return
+			}
+			updated, ok := store.updateName(id, strings.TrimSpace(*payload.Name))
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			// notify other clients via SSE
+			broker.publish(updated)
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(updated)
+			return
+
 		default:
 			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
@@ -769,6 +790,9 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker)
 			durationMs = time.Since(st).Milliseconds()
 		}
 
+		if partial.Name == "" {
+			partial.Name = fmt.Sprintf("%s %s [%d]", partial.Method, partial.URL, partial.ResponseStatus)
+		}
 		partial.ResponseStatus = resp.StatusCode
 		partial.ResponseHeaders = rh
 		partial.ResponseBodyBase64 = respBodyStr
@@ -826,3 +850,16 @@ func generateRootCA() (*x509.Certificate, *rsa.PrivateKey, error) {
 }
 
 func isPaused() bool { return paused.Load() }
+
+func (s *captureStore) updateName(id int64, name string) (Capture, bool) {
+	s.Lock()
+	defer s.Unlock()
+	for i := 0; i < s.count; i++ {
+		idx := (s.next - s.count + i + len(s.buf)) % len(s.buf)
+		if s.buf[idx].ID == id {
+			s.buf[idx].Name = name
+			return s.buf[idx], true
+		}
+	}
+	return Capture{}, false
+}

@@ -144,7 +144,8 @@
             overflow-y: auto;     /* vertical scroll within content */
             flex: 1 1 auto;       /* grow and shrink */
             min-height: 0;        /* critical for flex scrollability */
-        }        .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 12px; align-items:start; font-size:13px; color:var(--muted) }
+        }
+        .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 12px; align-items:start; font-size:13px; color:var(--muted) }
         .kv .k { color:var(--muted); }
         .headers { margin-top:8px; border-top:1px dashed rgba(255,255,255,0.03); padding-top:8px }
         .pre { background:#071018; padding:12px; border-radius:6px; font-family:var(--mono); font-size:13px; overflow:auto; white-space:pre-wrap; word-wrap:break-word; color:#dbeafe }
@@ -248,8 +249,10 @@
                 <div id="subMeta" class="subMeta">Select a request on the left to view details</div>
             </div>
             <div class="row-actions">
-                <button id="copyBtn" class="but" title="Copy raw JSON">Copy</button>
-                <button id="downloadBtn" class="but" title="Download capture JSON">Download</button>
+                <button id="renameBtn" class="but" title="Rename capture">Rename</button>
+                <button id="copyCurlBtn" class="but" title="Copy cURL">Copy cURL</button>
+                <button id="copyPythonBtn" class="but" title="Copy as Python requests">Copy Python</button>
+                <button id="downloadBtn" class="but" title="Download Response">Download Response</button>
                 <button id="openRawBtn" class="but" title="Open raw in new tab">Open Raw</button>
                 <button id="deleteBtn" class="but but-danger" title="Delete capture">Delete</button>
             </div>
@@ -266,9 +269,9 @@
             <div id="content" class="content" role="main">
             <div id="pane-overview" class="pane">
                 <div class="kv">
-                    <div class="k">Method</div><div id="ov-method">-</div>
-                    <div class="k">URL</div><div id="ov-url">-</div>
-                    <div class="k">Status</div><div id="ov-status">-</div>
+                    <div class="k">Method</div><div id="ov-method" style="color: #ffffff">-</div>
+                    <div class="k">URL</div><div id="ov-url" style="color: #ffffff">-</div>
+                    <div class="k">Status</div><div id="ov-status" style="color: #ffffff">-</div>
                     <div class="k">Duration</div><div id="ov-duration">-</div>
                     <div class="k">Time</div><div id="ov-time">-</div>
                 </div>
