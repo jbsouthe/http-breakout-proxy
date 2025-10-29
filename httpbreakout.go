@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -211,23 +213,68 @@ func (s *captureStore) clear() {
 }
 
 // small helper: read up to N bytes and return as string (base64 would be safer for arbitrary bytes).
-func readLimitedBody(r io.ReadCloser, max int) (string, io.ReadCloser, error) {
-	if r == nil {
+// imports needed:
+//   "bytes"
+//   "compress/gzip"
+//   "compress/zlib"
+//   "io"
+//   "io/ioutil"
+//   "strings"
+
+func readLimitedBody(rc io.ReadCloser, max int, encoding string) (string, io.ReadCloser, error) {
+	if rc == nil {
 		return "", ioutil.NopCloser(bytes.NewReader(nil)), nil
 	}
-	defer r.Close()
+	defer rc.Close()
+
 	var buf bytes.Buffer
-	limited := io.LimitReader(r, int64(max)+1)
+	limited := io.LimitReader(rc, int64(max)+1) // read up to max+1 to detect truncation
 	n, err := io.Copy(&buf, limited)
 	if err != nil {
 		return "", ioutil.NopCloser(bytes.NewReader(nil)), err
 	}
-	data := buf.Bytes()
+	raw := buf.Bytes()
+
+	// Always return the ORIGINAL bytes to the caller for reconstituting r.Body,
+	// so proxying behavior is unchanged.
+	restore := ioutil.NopCloser(bytes.NewReader(raw))
+
+	// If we exceeded the cap, we cannot reliably decompress; return truncated marker.
 	if n > int64(max) {
-		// truncated
-		return string(data[:max]) + "\n--truncated--", ioutil.NopCloser(bytes.NewReader(data)), nil
+		return string(raw[:max]) + "\n--truncated--", restore, nil
 	}
-	return string(data), ioutil.NopCloser(bytes.NewReader(data)), nil
+
+	// Try to decode per Content-Encoding for DISPLAY ONLY.
+	// We keep the original compressed bytes in the returned ReadCloser.
+	enc := strings.ToLower(strings.TrimSpace(encoding))
+	switch enc {
+	case "gzip":
+		gr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err == nil {
+			defer gr.Close()
+			if dec, derr := ioutil.ReadAll(gr); derr == nil {
+				// Trim to max if decompressed payload is too large (should be rare here since n<=max).
+				if len(dec) > max {
+					return string(dec[:max]) + "\n--truncated--", restore, nil
+				}
+				return string(dec), restore, nil
+			}
+		}
+	case "deflate":
+		zr, err := zlib.NewReader(bytes.NewReader(raw))
+		if err == nil {
+			defer zr.Close()
+			if dec, derr := ioutil.ReadAll(zr); derr == nil {
+				if len(dec) > max {
+					return string(dec[:max]) + "\n--truncated--", restore, nil
+				}
+				return string(dec), restore, nil
+			}
+		}
+	}
+
+	// Fallback: treat as plain text
+	return string(raw), restore, nil
 }
 
 // SSE broadcaster for live updates
@@ -738,8 +785,8 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker)
 		for k, v := range r.Header {
 			reqHeaders[k] = append([]string(nil), v...)
 		}
-
-		bodyStr, newBody, err := readLimitedBody(r.Body, maxStoredBody)
+		encoding := r.Header.Get("Content-Encoding")
+		bodyStr, newBody, err := readLimitedBody(r.Body, maxStoredBody, encoding)
 		if err != nil {
 			log.Printf("error reading request body: %v", err)
 			bodyStr = "--body-read-error--"
@@ -772,8 +819,8 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker)
 			return resp
 		}
 		partial := val.(Capture)
-
-		respBodyStr, newRespBody, err := readLimitedBody(resp.Body, maxStoredBody)
+		encoding := resp.Header.Get("Content-Encoding")
+		respBodyStr, newRespBody, err := readLimitedBody(resp.Body, maxStoredBody, strings.ToLower(encoding))
 		if err != nil {
 			respBodyStr = "--resp-body-read-error--"
 			newRespBody = io.NopCloser(bytes.NewReader(nil))
@@ -862,4 +909,34 @@ func (s *captureStore) updateName(id int64, name string) (Capture, bool) {
 		}
 	}
 	return Capture{}, false
+}
+
+// helper: decompress if gzip or deflate
+func maybeDecompress(body []byte, encoding string) []byte {
+	switch encoding {
+	case "gzip":
+		r, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return body
+		}
+		defer r.Close()
+		out, err := io.ReadAll(r)
+		if err != nil {
+			return body
+		}
+		return out
+	case "deflate":
+		r, err := zlib.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return body
+		}
+		defer r.Close()
+		out, err := io.ReadAll(r)
+		if err != nil {
+			return body
+		}
+		return out
+	default:
+		return body
+	}
 }
