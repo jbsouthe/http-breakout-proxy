@@ -483,6 +483,9 @@ function renderDetails(c) {
     if (deleteBtn) {
         deleteBtn.onclick = () => deleteCapture(c.id, { confirmFirst: true });
     }
+    // Force scroll-to-top of the details panel
+    const detailsPanel = document.querySelector('.details');
+    if (detailsPanel) detailsPanel.scrollTo({ top: 0, behavior: 'instant' });
 }
 
 function renderCode(preEl, body, language) {
