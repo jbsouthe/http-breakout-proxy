@@ -1,3 +1,6 @@
+let captures = [];   // newest-first
+let selectedId = null;
+
 const API_LIST = '/api/captures';
 const API_GET  = (id) => `/api/captures/${id}`;
 
@@ -45,25 +48,75 @@ async function loadInitial() {
         const r = await fetch(API_LIST);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const arr = await r.json();
-        window._captures = (arr || []).reverse(); // newest first
+        captures = (arr || []).reverse(); // newest first
         renderList();
-        if (window._captures.length) {
-            selectCapture(window._captures[0].id);
+        if (captures.length) {
+            selectCapture(captures[0].id);
         }
     } catch (e) {
         console.error('initial fetch failed:', e);
     }
 }
 
+// Clears all visible fields via renderDetails()
+function blankDetails() {
+    const emptyCapture = {
+        id: null,
+        method: '',
+        url: '',
+        response_status: '',
+        duration_ms: '',
+        time: '',
+        request_headers: {},
+        response_headers: {},
+        request_body: '',
+        response_body: ''
+    };
+    renderDetails(emptyCapture);
+}
+
 function startSSE() {
     const es = new EventSource('/events');
-    es.onmessage = (ev) => {
+    es.onmessage = function(e){
         try {
-            const c = JSON.parse(ev.data);
-            window._captures.unshift(c);
-            if (window._captures.length > 2000) window._captures.pop();
+            const c = JSON.parse(e.data);
+
+            if (c.deleted) {
+                // remove from local list
+                const idx = (captures || []).findIndex(x => x.id === c.id);
+                if (idx >= 0) captures.splice(idx, 1);
+
+                // if currently selected, clear or select next
+                if (selectedId === c.id) {
+                    selectedId = null;
+                    // optionally auto-select the newest remaining
+                    if (captures.length) {
+                        selectCapture(captures[0].id);
+                    } else {
+                        // clear detail panes
+                        blankDetails();
+                        document.getElementById('titleLarge').textContent = 'No capture selected';
+                        document.getElementById('subMeta').textContent = '';
+                        document.getElementById('req-body').textContent = '';
+                        document.getElementById('resp-body').textContent = '';
+                        document.getElementById('rawJson').textContent = '';
+                    }
+                }
+                // re-render list to reflect removal
+                renderList();
+                return;
+            }
+
+            // normal new-capture event
+            captures = captures || [];
+            captures.unshift(c);
+            if (captures.length > 2000) captures.pop();
             renderList();
-        } catch (e) { console.error('SSE parse', e); }
+            if (!selectedId) selectCapture(c.id);
+
+        } catch (err) {
+            console.error(err);
+        }
     };
     es.onerror = () => console.warn('SSE error');
 }
@@ -72,7 +125,7 @@ function renderList() {
     const list = document.getElementById('list');
     if (!list) return;
     list.innerHTML = '';
-    (window._captures || []).slice(0, 1000).forEach(c => {
+    (captures || []).slice(0, 1000).forEach(c => {
         const row = document.createElement('div');
         row.className = 'row';
         row.textContent = `${c.method} ${c.url} [${c.response_status ?? '-'}]`;
@@ -111,6 +164,7 @@ function escapeHtml(s){ return s==null ? '' : String(s).replace(/&/g,'&amp;').re
 // --- REPLACE your selectCapture + renderDetails with these:
 
 async function selectCapture(id) {
+    selectedId = id;
     console.log('[UI] selectCapture', id);
     try {
         const r = await fetch(`/api/captures/${id}`);
@@ -173,6 +227,7 @@ function renderDetails(c) {
     const ovStatus = document.getElementById('ov-status');
     const ovDuration = document.getElementById('ov-duration');
     const ovTime = document.getElementById('ov-time');
+    const deleteBtn = document.getElementById('deleteBtn');
 
     // Assert DOM presence
     if (!title || !sub || !reqHdrEl || !respHdrEl || !reqBodyEl || !respBodyEl || !rawEl || !ovMethod || !ovURL || !ovStatus || !ovDuration || !ovTime) {
@@ -198,7 +253,9 @@ function renderDetails(c) {
     ovStatus.textContent = status + " " + getStatusText(status);
     ovDuration.textContent = (dur ?? '-') + ' ms';
     ovTime.textContent = t ? new Date(t).toLocaleString() : '-';
-
+    if (deleteBtn) {
+        deleteBtn.onclick = () => deleteCapture(c.id, { confirmFirst: true });
+    }
 }
 
 function renderCode(preEl, body, language) {
@@ -214,6 +271,82 @@ function detectLanguage(headers) {
     if (ct.includes('application/json')) return 'json';
     if (ct.includes('xml') || ct.includes('html')) return 'xml';
     return 'plaintext';
+}
+
+async function deleteCapture(id, { confirmFirst = true } = {}) {
+    if (!id) return;
+    if (confirmFirst && !window.confirm(`Delete capture #${id}? This cannot be undone.`)) return;
+
+    try {
+        const res = await fetch(`/api/captures/${id}`, { method: 'DELETE' });
+        if (res.status === 204) {
+            const idx = captures.findIndex(x => x.id === id);
+            if (idx >= 0) {
+                captures.splice(idx, 1);
+                if (selectedId === id) {
+                    // choose neighbor or clear
+                    if (captures.length === 0) {
+                        selectedId = null;
+                        clearDetails();
+                        renderList();
+                    } else {
+                        selectNeighborAfterRemoval(idx);
+                    }
+                } else {
+                    renderList();
+                }
+            } else {
+                // not found locally; just re-render
+                renderList();
+            }
+            return;
+        } else if (res.status === 404) {
+            // Already gone (maybe via another client); refresh list
+            const idx = (captures || []).findIndex(x => x.id === id);
+            if (idx >= 0) { captures.splice(idx, 1); renderList(); }
+        } else {
+            console.error('Delete failed:', res.status, res.statusText);
+            alert(`Delete failed: ${res.status} ${res.statusText}`);
+        }
+    } catch (e) {
+        console.error('Delete error:', e);
+        alert(`Delete error: ${e}`);
+    }
+}
+
+function clearDetails() {
+    const t = document.getElementById('titleLarge');
+    const s = document.getElementById('subMeta');
+    const rb = document.getElementById('req-body');
+    const sb = document.getElementById('resp-body');
+    const raw = document.getElementById('rawJson');
+    if (t) t.textContent = 'No capture selected';
+    if (s) s.textContent = '';
+    if (rb) rb.textContent = '';
+    if (sb) sb.textContent = '';
+    if (raw) raw.textContent = '';
+}
+
+function selectNeighborAfterRemoval(idxRemoved) {
+    if (!Array.isArray(captures) || captures.length === 0) {
+        selectedId = null;
+        clearDetails();
+        renderList();
+        return;
+    }
+    // After splice, index `idxRemoved` now points to the *next* item (if any).
+    if (idxRemoved < captures.length) {
+        const nextId = captures[idxRemoved].id;
+        selectedId = nextId;
+        renderList();
+        selectCapture(nextId);
+        return;
+    }
+    // Otherwise select the last (previous neighbor)
+    const prevId = captures[captures.length - 1].id;
+    selectedId = prevId;
+    renderList();
+    selectCapture(prevId);
 }
 
 // If you used <script defer>, either:

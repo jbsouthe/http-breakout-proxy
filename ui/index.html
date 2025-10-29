@@ -109,8 +109,11 @@
 
         /* small buttons */
         .row-actions { display:flex; gap:8px }
-        .but { background:transparent; border:1px solid rgba(255,255,255,0.04); padding:6px 8px; border-radius:6px; cursor:pointer }
+        .but { background:transparent; border:1px solid rgba(255,255,255,0.04); padding:6px 8px; border-radius:6px; cursor:pointer; color:#ffffff }
         .but:hover{ border-color:var(--accent) }
+
+        .but-danger { border-color: rgba(220,38,38,0.5) !important }
+        .but-danger:hover { border-color: rgba(220,38,38,0.9) !important }
 
         /* responsive */
         @media (max-width:900px){
@@ -161,6 +164,12 @@
         <div id="tab-overview" class="tab-pane">
             <div id="content" class="content" role="main">
             <div id="pane-overview" class="pane">
+                <div class="row-actions">
+                    <button id="copyBtn" class="but" title="Copy raw JSON">Copy</button>
+                    <button id="downloadBtn" class="but" title="Download capture JSON">Download</button>
+                    <button id="openRawBtn" class="but" title="Open raw in new tab">Open Raw</button>
+                    <button id="deleteBtn" class="but but-danger" title="Delete capture">Delete</button>
+                </div>
                 <div class="kv">
                     <div class="k">Method</div><div id="ov-method">-</div>
                     <div class="k">URL</div><div id="ov-url">-</div>

@@ -20,10 +20,12 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/elazarl/goproxy"
@@ -50,6 +52,7 @@ type Capture struct {
 	ResponseBodyBase64 string              `json:"response_body"`
 	DurationMs         int64               `json:"duration_ms"`
 	Notes              string              `json:"notes,omitempty"`
+	Deleted            bool                `json:"deleted,omitempty"`
 }
 
 type captureStore struct {
@@ -105,6 +108,92 @@ func (s *captureStore) get(id int64) (Capture, bool) {
 		}
 	}
 	return Capture{}, false
+}
+
+// delete removes a capture by ID. Returns true if deleted.
+func (s *captureStore) delete(id int64) bool {
+	s.Lock()
+	defer s.Unlock()
+	// Rebuild the list excluding the target id
+	kept := make([]Capture, 0, s.count)
+	start := (s.next - s.count + len(s.buf)) % len(s.buf)
+	for i := 0; i < s.count; i++ {
+		c := s.buf[(start+i)%len(s.buf)]
+		if c.ID != id {
+			kept = append(kept, c)
+		}
+	}
+	if len(kept) == s.count {
+		// nothing removed
+		return false
+	}
+	// clear buffer and repopulate from kept
+	for i := range s.buf {
+		var zero Capture
+		s.buf[i] = zero
+	}
+	for i := 0; i < len(kept); i++ {
+		s.buf[i] = kept[i]
+	}
+	s.count = len(kept)
+	s.next = s.count % len(s.buf)
+	return true
+}
+
+// persistHelpers: save/load circular buffer to JSON file (atomic write)
+func saveCapturesToFile(path string, list []Capture) error {
+	// write to temp file and rename
+	tmp := path + ".tmp"
+	b, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func loadCapturesFromFile(path string) ([]Capture, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var list []Capture
+	if err := json.Unmarshal(b, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// populateFromSlice fills the circular buffer from a slice of captures
+func (s *captureStore) populateFromSlice(list []Capture) {
+	s.Lock()
+	defer s.Unlock()
+	if len(list) == 0 {
+		return
+	}
+	capBuf := len(s.buf)
+	// If loaded list is larger than buffer, keep only the latest entries
+	if len(list) > capBuf {
+		list = list[len(list)-capBuf:]
+	}
+	// copy into buffer starting at 0..len(list)-1
+	for i := 0; i < len(list); i++ {
+		s.buf[i] = list[i]
+	}
+	s.count = len(list)
+	s.next = s.count % capBuf
+	// set seq to max ID + 1 to avoid collisions
+	var maxID int64 = 0
+	for _, c := range list {
+		if c.ID > maxID {
+			maxID = c.ID
+		}
+	}
+	if maxID >= s.seq {
+		s.seq = maxID + 1
+	}
 }
 
 // small helper: read up to N bytes and return as string (base64 would be safer for arbitrary bytes).
@@ -368,6 +457,41 @@ func main() {
 	store := newCaptureStore(maxStoredEntries)
 	broker := newSseBroker()
 
+	// Attempt to load persisted captures from disk (ignore errors)
+	const persistPath = "./captures.json"
+	if list, err := loadCapturesFromFile(persistPath); err == nil {
+		log.Printf("Loaded %d captures from %s", len(list), persistPath)
+		store.populateFromSlice(list)
+	} else {
+		if !os.IsNotExist(err) {
+			log.Printf("Warning: failed to load captures: %v", err)
+		}
+	}
+
+	// Start periodic persistence goroutine (atomic file writes)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			list := store.list()
+			if err := saveCapturesToFile(persistPath, list); err != nil {
+				log.Printf("Error saving captures: %v", err)
+			}
+		}
+	}()
+
+	// Graceful save on shutdown signals
+	go func() {
+		sigc := make(chan os.Signal, 1)
+		signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+		<-sigc
+		log.Printf("Shutting down: saving captures to %s", persistPath)
+		if err := saveCapturesToFile(persistPath, store.list()); err != nil {
+			log.Printf("Error saving captures on shutdown: %v", err)
+		}
+		os.Exit(0)
+	}()
+
 	// Build handlers but do NOT start additional servers.
 	uiHandler := buildUIHandler(store, broker)
 	proxyHandler := buildProxyHandler(*mitm, store, broker)
@@ -403,10 +527,7 @@ func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
 	})
 
 	mux.HandleFunc("/api/captures/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method", http.StatusMethodNotAllowed)
-			return
-		}
+		// expect /api/captures/{id}
 		const prefix = "/api/captures/"
 		if !strings.HasPrefix(r.URL.Path, prefix) {
 			http.NotFound(w, r)
@@ -422,14 +543,38 @@ func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
 			http.Error(w, "bad id", http.StatusBadRequest)
 			return
 		}
-		c, ok := store.get(id)
-		if !ok {
-			http.NotFound(w, r)
+
+		switch r.Method {
+		case http.MethodGet:
+			c, ok := store.get(id)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(c)
+			return
+
+		case http.MethodDelete:
+			deleted := store.delete(id)
+			if !deleted {
+				http.NotFound(w, r)
+				return
+			}
+			// Broadcast a deletion event over SSE
+			broker.publish(Capture{
+				ID:      id,
+				Time:    time.Now().UTC(),
+				Deleted: true,
+				Notes:   "deleted",
+			})
+			w.WriteHeader(http.StatusNoContent)
+			return
+
+		default:
+			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
 		}
-		log.Printf("request /api/captures/%d: %v", id, c)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(c)
 	})
 
 	// SSE events
