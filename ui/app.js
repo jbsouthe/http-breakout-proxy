@@ -36,7 +36,7 @@ function setupTabs() {
     if (tabs.length) tabs[0].click();
 }
 
-function bindUI() {
+async function bindUI() {
     function debounce(fn, ms=120){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
     const filterInput = document.getElementById('filterInput');
@@ -50,6 +50,21 @@ function bindUI() {
     const clearBtn = document.getElementById('clearBtn');
     if (clearBtn) {
         clearBtn.addEventListener('click', clearAllCaptures);
+    }
+
+    const pauseBtn = document.getElementById('pauseBtn');
+    if (pauseBtn) {
+        // initialize label from server state
+        const paused = await getPauseState();
+        updatePauseButtonUI(paused);
+
+        pauseBtn.addEventListener('click', async () => {
+            const current = await getPauseState(); // read latest (in case multiple tabs)
+            const next = !current;
+            const applied = await setPauseState(next);
+            if (applied === null) return; // error already logged
+            updatePauseButtonUI(applied);
+        });
     }
 
 }
@@ -91,6 +106,15 @@ function startSSE() {
     es.onmessage = function(e){
         try {
             const c = JSON.parse(e.data);
+
+            if (c.notes === 'paused') {
+                updatePauseButtonUI(true);
+                return;
+            }
+            if (c.notes === 'resumed') {
+                updatePauseButtonUI(false);
+                return;
+            }
 
             if (c.notes === 'cleared') {
                 captures = [];
@@ -512,6 +536,43 @@ function parseHeaderSpec(spec) {
     const name  = spec.slice(0, eq);
     const value = spec.slice(eq + 1);
     return { nameQ: parseMaybeRegex(name), valueQ: parseMaybeRegex(value) };
+}
+
+async function getPauseState() {
+    try {
+        const r = await fetch('/api/pause');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        return !!j.paused;
+    } catch (e) {
+        console.error('[UI] getPauseState error', e);
+        return false;
+    }
+}
+
+async function setPauseState(nextPaused) {
+    try {
+        const r = await fetch('/api/pause', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paused: !!nextPaused }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        return !!j.paused;
+    } catch (e) {
+        console.error('[UI] setPauseState error', e);
+        return null;
+    }
+}
+
+function updatePauseButtonUI(paused) {
+    const btn = document.getElementById('pauseBtn');
+    if (!btn) return;
+    btn.textContent = paused ? 'Resume' : 'Pause';
+    btn.title = paused ? 'Resume capture' : 'Pause capture';
+    // optional styling:
+    // btn.classList.toggle('but-danger', paused);
 }
 
 // If you used <script defer>, either:

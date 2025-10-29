@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 
 //go:embed ui/*
 var uiFS embed.FS
+var paused atomic.Bool
 
 const (
 	maxStoredBody    = 1 << 20 // 1 MB per body
@@ -464,6 +466,7 @@ func main() {
 	var listen = flag.String("listen", "127.0.0.1:8080", "single address for both proxy and UI")
 	var mitm = flag.Bool("mitm", true, "enable HTTPS MITM (requires installing CA in clients)")
 	flag.Parse()
+	paused.Store(false)
 
 	store := newCaptureStore(maxStoredEntries)
 	broker := newSseBroker()
@@ -638,6 +641,42 @@ func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
 		}
 	})
 
+	mux.HandleFunc("/api/pause", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"paused": paused.Load()})
+			return
+
+		case http.MethodPost:
+			// Accept JSON body: { "paused": true/false }
+			var payload struct {
+				Paused *bool `json:"paused"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Paused == nil {
+				http.Error(w, "bad payload", http.StatusBadRequest)
+				return
+			}
+			was := paused.Swap(*payload.Paused)
+			// Emit an SSE control event (using your existing Capture type)
+			note := "resumed"
+			if *payload.Paused {
+				note = "paused"
+			}
+			broker.publish(Capture{
+				Time:  time.Now().UTC(),
+				Notes: note, // client will look for notes == "paused"/"resumed"
+			})
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"paused": paused.Load(), "was": was})
+			return
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+	})
+
 	// Static UI from embedded FS at root
 	sub, err := fs.Sub(uiFS, "ui")
 	if err != nil {
@@ -668,6 +707,10 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker)
 	// Capture request
 	proxy.OnRequest().DoFunc(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		log.Printf("Request: %s", r.URL.String())
+		if isPaused() {
+			// Do not record; just pass through unchanged.
+			return r, nil
+		}
 		start := time.Now()
 
 		reqHeaders := make(map[string][]string, len(r.Header))
@@ -699,7 +742,7 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker)
 
 	// Capture response
 	proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-		if resp == nil || ctx == nil || ctx.Req == nil {
+		if isPaused() || resp == nil || ctx == nil || ctx.Req == nil {
 			return resp
 		}
 		key := reqKey(ctx.Req)
@@ -781,3 +824,5 @@ func generateRootCA() (*x509.Certificate, *rsa.PrivateKey, error) {
 	}
 	return cert, priv, nil
 }
+
+func isPaused() bool { return paused.Load() }
