@@ -43,7 +43,15 @@
         .badge { background:rgba(255,255,255,0.04); padding:2px 6px; border-radius:4px; font-size:12px; color:var(--muted) }
 
         /* Right column: details */
-        .details { display:flex; flex-direction:column; gap:12px; overflow:hidden }
+        .details {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow: hidden;
+            overflow-y: auto;
+            height: 100%;
+            min-height: 0; /* allow flex children to shrink properly */
+        }
         .details-top { display:flex; gap:12px; align-items:center; justify-content:space-between }
         .titleLarge { font-size:18px; font-weight:700 }
         .subMeta { color:var(--muted); font-size:13px }
@@ -52,8 +60,14 @@
         .tab.active { border-color:var(--accent); box-shadow: 0 6px 18px rgba(31,111,235,0.12) }
 
         /* content panes */
-        .content { background:linear-gradient(180deg,#071526, #041225); border-radius:8px; padding:12px; overflow:auto; flex:1; }
-        .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 12px; align-items:start; font-size:13px; color:var(--muted) }
+        .content {
+            background: linear-gradient(180deg,#071526, #041225);
+            border-radius: 8px;
+            padding: 12px;
+            overflow-y: auto;     /* vertical scroll within content */
+            flex: 1 1 auto;       /* grow and shrink */
+            min-height: 0;        /* critical for flex scrollability */
+        }        .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 12px; align-items:start; font-size:13px; color:var(--muted) }
         .kv .k { color:var(--muted); }
         .headers { margin-top:8px; border-top:1px dashed rgba(255,255,255,0.03); padding-top:8px }
         .pre { background:#071018; padding:12px; border-radius:6px; font-family:var(--mono); font-size:13px; overflow:auto; white-space:pre-wrap; word-wrap:break-word; color:#dbeafe }
@@ -102,9 +116,13 @@
             white-space: pre-wrap;         /* preserve formatting but wrap lines */
             word-break: break-word;        /* break long words */
             font-family: monospace;        /* good for HTTP bodies or headers */
-            max-height: 400px;             /* optional: limit height */
+            max-height: none;             /* optional: limit height */
             overflow: auto;                /* scroll if too large */
             box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+            height: auto;
+            flex: 1 1 auto;
+            overflow-y: auto;
+            resize: vertical;
         }
 
         /* small buttons */
@@ -151,6 +169,7 @@
                 <button id="copyBtn" class="but" title="Copy raw JSON">Copy</button>
                 <button id="downloadBtn" class="but" title="Download capture JSON">Download</button>
                 <button id="openRawBtn" class="but" title="Open raw in new tab">Open Raw</button>
+                <button id="deleteBtn" class="but but-danger" title="Delete capture">Delete</button>
             </div>
         </div>
 
@@ -164,12 +183,6 @@
         <div id="tab-overview" class="tab-pane">
             <div id="content" class="content" role="main">
             <div id="pane-overview" class="pane">
-                <div class="row-actions">
-                    <button id="copyBtn" class="but" title="Copy raw JSON">Copy</button>
-                    <button id="downloadBtn" class="but" title="Download capture JSON">Download</button>
-                    <button id="openRawBtn" class="but" title="Open raw in new tab">Open Raw</button>
-                    <button id="deleteBtn" class="but but-danger" title="Delete capture">Delete</button>
-                </div>
                 <div class="kv">
                     <div class="k">Method</div><div id="ov-method">-</div>
                     <div class="k">URL</div><div id="ov-url">-</div>
