@@ -52,15 +52,15 @@ Captured traffic will appear in the web UI.
 
 ## Command-Line Arguments
 
-| Flag | Default | Description |
-|------|----------|-------------|
+| Flag | Default          | Description |
+|------|------------------|-------------|
 | `-listen` | `127.0.0.1:8080` | Address for the proxy to listen on as well as a UI app. |
-| `-mitm` | `true` | Enable HTTPS MITM interception (generates a local CA for intercepting TLS). |
-| `-ca-dir` | `./ca` | Directory in which generated CA certificate and key are stored when MITM is enabled and persistence is chosen. |
-| `-persist` | *(none)* | Optional path or directory for persisting captures to disk (e.g., `./captures.json`). |
-| `-max-body` | `1048576` | Maximum number of bytes (per body) to store/display; larger bodies are truncated with a sentinel. |
-| `-buffer-size` | `1000` | Circular buffer capacity for in-memory captures. |
-| `-verbose` | `false` | Enable verbose logging for debugging. |
+| `-mitm` | `true`           | Enable HTTPS MITM interception (generates a local CA for intercepting TLS). |
+| `-ca-dir` | `./ca`           | Directory in which generated CA certificate and key are stored when MITM is enabled and persistence is chosen. |
+| `-persist` | ./captures.json  | Optional path or directory for persisting captures to disk (e.g., `./captures.json`). |
+| `-max-body` | `1048576`        | Maximum number of bytes (per body) to store/display; larger bodies are truncated with a sentinel. |
+| `-buffer-size` | `1000`           | Circular buffer capacity for in-memory captures. |
+| `-verbose` | `false`          | Enable verbose logging for debugging. |
 
 > Use `./http-breakout-proxy -h` to list available flags and usage descriptions.
 

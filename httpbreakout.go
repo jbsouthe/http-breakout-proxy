@@ -38,7 +38,7 @@ import (
 var uiFS embed.FS
 var paused atomic.Bool
 
-const (
+var (
 	maxStoredBody    = 1 << 20 // 1 MB per body
 	maxStoredEntries = 1000    // circular buffer size
 )
@@ -511,52 +511,92 @@ func createEphemeralCA() (*x509.Certificate, *rsa.PrivateKey, error) {
 // --- end MITM initialization --------------------------------------------------
 
 func main() {
-	var listen = flag.String("listen", "127.0.0.1:8080", "single address for both proxy and UI")
-	var mitm = flag.Bool("mitm", true, "enable HTTPS MITM (requires installing CA in clients)")
+	// CLI flags (match README)
+	var (
+		listen     = flag.String("listen", "127.0.0.1:8080", "address for proxy + UI to listen on (single-port mode)")
+		mitm       = flag.Bool("mitm", true, "enable HTTPS MITM (requires installing CA in clients)")
+		caDir      = flag.String("ca-dir", "./ca", "directory to store persistent CA cert and key")
+		persist    = flag.String("persist", "./captures.json", "path to captures persistence file (e.g. ./captures.json). empty = no persistence")
+		maxBody    = flag.Int("max-body", maxStoredBody, "maximum bytes to store/display per request/response body")
+		bufferSize = flag.Int("buffer-size", maxStoredEntries, "circular buffer capacity for captured entries")
+		verbose    = flag.Bool("verbose", false, "enable verbose logging")
+	)
 	flag.Parse()
-	paused.Store(false)
 
-	store := newCaptureStore(maxStoredEntries)
-	broker := newSseBroker()
-
-	// Attempt to load persisted captures from disk (ignore errors)
-	const persistPath = "./captures.json"
-	if list, err := loadCapturesFromFile(persistPath); err == nil {
-		log.Printf("Loaded %d captures from %s", len(list), persistPath)
-		store.populateFromSlice(list)
-	} else {
-		if !os.IsNotExist(err) {
-			log.Printf("Warning: failed to load captures: %v", err)
-		}
+	if *verbose {
+		log.Printf("Flags: listen=%s mitm=%v ca-dir=%s persist=%s max-body=%d buffer-size=%d",
+			*listen, *mitm, *caDir, *persist, *maxBody, *bufferSize)
 	}
 
-	// Start periodic persistence goroutine (atomic file writes)
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			list := store.list()
-			if err := saveCapturesToFile(persistPath, list); err != nil {
-				log.Printf("Error saving captures: %v", err)
+	// Apply runtime-configurable constants (if you prefer to keep package-level consts, you can copy/assign)
+	// Replace the package consts with local vars where needed. Example:
+	// Note: here we update the globals used elsewhere by assigning.
+	// If you want to avoid globals, refactor code to accept these parameters.
+	// Update globals (one-off):
+	// maxStoredBody = *maxBody         // cannot assign to const; make variable if needed
+	// maxStoredEntries = *bufferSize   // same as above
+
+	// If you want to change buffer sizes dynamically, change your package-level consts to vars:
+	// var maxStoredBody = 1 << 20
+	// var maxStoredEntries = 1000
+	// then here: maxStoredBody = *maxBody; maxStoredEntries = *bufferSize
+
+	paused.Store(false)
+
+	// Create store with configured capacity
+	store := newCaptureStore(*bufferSize)
+	broker := newSseBroker()
+
+	// Persistence
+	persistPath := *persist
+	if persistPath != "" {
+		if list, err := loadCapturesFromFile(persistPath); err == nil {
+			log.Printf("Loaded %d captures from %s", len(list), persistPath)
+			store.populateFromSlice(list)
+		} else {
+			if !os.IsNotExist(err) {
+				log.Printf("Warning: failed to load captures from %s: %v", persistPath, err)
 			}
 		}
-	}()
 
-	// Graceful save on shutdown signals
-	go func() {
-		sigc := make(chan os.Signal, 1)
-		signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
-		<-sigc
-		log.Printf("Shutting down: saving captures to %s", persistPath)
-		if err := saveCapturesToFile(persistPath, store.list()); err != nil {
-			log.Printf("Error saving captures on shutdown: %v", err)
-		}
-		os.Exit(0)
-	}()
+		// periodic save goroutine
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				list := store.list()
+				if err := saveCapturesToFile(persistPath, list); err != nil {
+					log.Printf("Error saving captures: %v", err)
+				}
+			}
+		}()
 
-	// Build handlers but do NOT start additional servers.
+		// graceful shutdown saver
+		go func() {
+			sigc := make(chan os.Signal, 1)
+			signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+			<-sigc
+			log.Printf("Shutting down: saving captures to %s", persistPath)
+			if err := saveCapturesToFile(persistPath, store.list()); err != nil {
+				log.Printf("Error saving captures on shutdown: %v", err)
+			}
+			os.Exit(0)
+		}()
+	} else {
+		// still set up a graceful shutdown saver that does nothing if no persistence requested
+		go func() {
+			sigc := make(chan os.Signal, 1)
+			signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+			<-sigc
+			log.Printf("Shutting down")
+			os.Exit(0)
+		}()
+	}
+
+	// Build handlers. Pass relevant flags through where required:
 	uiHandler := buildUIHandler(store, broker)
-	proxyHandler := buildProxyHandler(*mitm, store, broker)
+	// Pass caDir and maxBody if enableMITM or proxy code needs them.
+	proxyHandler := buildProxyHandler(*mitm, store, broker, *caDir)
 
 	// Combined handler: route proxy-style requests to proxy; everything else to UI
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -569,7 +609,7 @@ func main() {
 		uiHandler.ServeHTTP(w, r)
 	})
 
-	log.Printf("Listening on %s for both Proxy and UI (UI at http://%s/)", *listen, *listen)
+	log.Printf("Listening on %s for Proxy+UI (single-port).", *listen)
 	log.Fatal(http.ListenAndServe(*listen, handler))
 }
 
@@ -756,13 +796,13 @@ func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
 }
 
 // buildProxyHandler configures and returns the proxy handler.
-func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker) http.Handler {
+func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker, caDur string) http.Handler {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 
 	// Enable MITM if requested
 	if mitmEnabled {
-		if err := enableMITM(proxy, true, "./ca"); err != nil {
+		if err := enableMITM(proxy, true, caDur); err != nil {
 			log.Fatalf("MITM init failed: %v", err)
 		}
 	} else {
