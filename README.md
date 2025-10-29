@@ -57,8 +57,7 @@ Captured traffic will appear in the web UI.
 
 | Flag | Default | Description |
 |------|----------|-------------|
-| `-listen` | `127.0.0.1:8080` | Address for the proxy to listen on (can host proxy and UI if desired). |
-| `-ui` | `127.0.0.1:8081` | Address for the web UI (REST + SSE). If you run single-port mode, UI may be served at `-listen`. |
+| `-listen` | `127.0.0.1:8080` | Address for the proxy to listen on as well as a UI app. |
 | `-mitm` | `true` | Enable HTTPS MITM interception (generates a local CA for intercepting TLS). |
 | `-ca-dir` | `./ca` | Directory in which generated CA certificate and key are stored when MITM is enabled and persistence is chosen. |
 | `-persist` | *(none)* | Optional path or directory for persisting captures to disk (e.g., `./captures.json`). |
