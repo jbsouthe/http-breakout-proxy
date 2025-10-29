@@ -1,6 +1,3 @@
-from pathlib import Path
-
-readme_text = """# HTTP Breakout Proxy
 
 **HTTP Breakout Proxy** is a lightweight, cross-platform HTTP/HTTPS interception proxy implemented in Go with an embedded real-time web interface for capture inspection and manipulation. It is intended for diagnostic and development use: debugging API clients, inspecting integrations, and interactively replaying or exporting captured requests/responses.
 
