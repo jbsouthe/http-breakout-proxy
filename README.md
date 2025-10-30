@@ -1,7 +1,9 @@
 
 **HTTP Breakout Proxy** is a lightweight, cross-platform HTTP/HTTPS interception proxy implemented in Go with an embedded real-time web interface for capture inspection and manipulation. It is intended for diagnostic and development use: debugging API clients, inspecting integrations, and interactively replaying or exporting captured requests/responses.
 
-![Web App](doc_images/Main-page.png)
+![Web App](doc_images/Main-page.png) 
+
+![Color Rules](doc_images/color_modal.png)
 ---
 
 ## Features
@@ -13,6 +15,7 @@
 - Request/response inspection with automatic decompression (gzip/deflate) for display.
 - Advanced filter language (plain text, keyed prefixes, and `/regex/flags`).
 - Capture management: rename, delete, clear, pause/resume capture collection.
+- Color tagging based on custom search rules
 - Export helpers: copy as `curl`, copy as Python `requests`, download raw response body.
 - Simple REST API for automation and integration.
 
