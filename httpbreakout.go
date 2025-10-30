@@ -878,7 +878,7 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 		}
 
 		if partial.Name == "" {
-			partial.Name = fmt.Sprintf("%s %s [%d]", partial.Method, partial.URL, partial.ResponseStatus)
+			partial.Name = fmt.Sprintf("%s %s [%d]", partial.Method, partial.URL, resp.StatusCode)
 		}
 		partial.ResponseStatus = resp.StatusCode
 		partial.ResponseHeaders = rh
