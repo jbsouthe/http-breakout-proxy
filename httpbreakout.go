@@ -31,6 +31,8 @@ import (
 	"syscall"
 	"time"
 
+	"sort"
+
 	"github.com/elazarl/goproxy"
 )
 
@@ -42,6 +44,43 @@ var (
 	maxStoredBody    = 1 << 20 // 1 MB per body
 	maxStoredEntries = 1000    // circular buffer size
 )
+
+type PersistedData struct {
+	Captures   []Capture   `json:"captures"`
+	ColorRules []ColorRule `json:"color_rules,omitempty"`
+}
+
+type ColorRule struct {
+	ID       string `json:"id"`
+	Query    string `json:"query"`
+	Color    string `json:"color"`
+	Note     string `json:"note"`
+	Enabled  bool   `json:"enabled"`
+	Priority int    `json:"priority,omitempty"`
+}
+
+type ruleStore struct {
+	sync.RWMutex
+	rules []ColorRule
+}
+
+func (rs *ruleStore) getAll() []ColorRule {
+	rs.RLock()
+	defer rs.RUnlock()
+	out := make([]ColorRule, len(rs.rules))
+	copy(out, rs.rules)
+	return out
+}
+func (rs *ruleStore) replace(all []ColorRule) {
+	rs.Lock()
+	defer rs.Unlock()
+	// Copy then sort by Priority DESC; stable keeps original relative order for ties.
+	copied := append([]ColorRule(nil), all...)
+	sort.SliceStable(copied, func(i, j int) bool {
+		return copied[i].Priority > copied[j].Priority
+	})
+	rs.rules = copied
+}
 
 // Capture represents a single proxied transaction (request + response)
 type Capture struct {
@@ -146,6 +185,56 @@ func (s *captureStore) delete(id int64) bool {
 }
 
 // persistHelpers: save/load circular buffer to JSON file (atomic write)
+// saveAll writes both captures and color rules atomically.
+func saveAll(path string, caps []Capture, rules []ColorRule) error {
+	payload := PersistedData{
+		Captures:   caps,
+		ColorRules: rules,
+	}
+	b, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// loadAll reads captures + rules. Back-compat: if the file is either a plain
+// []Capture or an object containing only captures, we still succeed.
+func loadAll(path string) ([]Capture, []ColorRule, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Try new format first
+	var pd PersistedData
+	if err := json.Unmarshal(b, &pd); err == nil && (pd.Captures != nil || pd.ColorRules != nil) {
+		return pd.Captures, pd.ColorRules, nil
+	}
+
+	// Fallback 1: plain []Capture
+	var caps []Capture
+	if err := json.Unmarshal(b, &caps); err == nil {
+		return caps, nil, nil
+	}
+
+	// Fallback 2: object with "captures" only (defensive)
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err == nil {
+		if raw, ok := obj["captures"]; ok {
+			if err := json.Unmarshal(raw, &caps); err == nil {
+				return caps, nil, nil
+			}
+		}
+	}
+
+	return nil, nil, fmt.Errorf("unrecognized persistence format")
+}
+
 func saveCapturesToFile(path string, list []Capture) error {
 	// write to temp file and rename
 	tmp := path + ".tmp"
@@ -545,40 +634,43 @@ func main() {
 
 	// Create store with configured capacity
 	store := newCaptureStore(*bufferSize)
+	rules := &ruleStore{}
 	broker := newSseBroker()
 
 	// Persistence
 	persistPath := *persist
 	if persistPath != "" {
-		if list, err := loadCapturesFromFile(persistPath); err == nil {
-			log.Printf("Loaded %d captures from %s", len(list), persistPath)
-			store.populateFromSlice(list)
-		} else {
-			if !os.IsNotExist(err) {
-				log.Printf("Warning: failed to load captures from %s: %v", persistPath, err)
+		if caps, crs, err := loadAll(persistPath); err == nil {
+			log.Printf("Loaded %d captures and %d color rules from %s", len(caps), len(crs), persistPath)
+			// populate capture store
+			for _, c := range caps {
+				_ = store.add(c) // or store.populateFromSlice if you have it
 			}
+			// populate rules
+			rules.replace(crs)
+		} else if !os.IsNotExist(err) {
+			log.Printf("Warning: failed to load %s: %v", persistPath, err)
 		}
 
-		// periodic save goroutine
+		// periodic save
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				list := store.list()
-				if err := saveCapturesToFile(persistPath, list); err != nil {
-					log.Printf("Error saving captures: %v", err)
+				if err := saveAll(persistPath, store.list(), rules.getAll()); err != nil {
+					log.Printf("Error saving %s: %v", persistPath, err)
 				}
 			}
 		}()
 
-		// graceful shutdown saver
+		// graceful shutdown save
 		go func() {
 			sigc := make(chan os.Signal, 1)
 			signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
 			<-sigc
-			log.Printf("Shutting down: saving captures to %s", persistPath)
-			if err := saveCapturesToFile(persistPath, store.list()); err != nil {
-				log.Printf("Error saving captures on shutdown: %v", err)
+			log.Printf("Shutting down: saving %s", persistPath)
+			if err := saveAll(persistPath, store.list(), rules.getAll()); err != nil {
+				log.Printf("Error saving on shutdown: %v", err)
 			}
 			os.Exit(0)
 		}()
@@ -594,7 +686,7 @@ func main() {
 	}
 
 	// Build handlers. Pass relevant flags through where required:
-	uiHandler := buildUIHandler(store, broker)
+	uiHandler := buildUIHandler(store, rules, broker)
 	// Pass caDir and maxBody if enableMITM or proxy code needs them.
 	proxyHandler := buildProxyHandler(*mitm, store, broker, *caDir)
 
@@ -614,7 +706,7 @@ func main() {
 }
 
 // buildUIHandler returns the mux for UI, REST, SSE, and static files.
-func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
+func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) http.Handler {
 	mux := http.NewServeMux()
 
 	// /api/captures  (list + clear)
@@ -643,6 +735,19 @@ func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+	})
+
+	// GET /api/data -> PersistedData
+	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(PersistedData{
+			Captures:   store.list(),
+			ColorRules: rules.getAll(),
+		})
 	})
 
 	mux.HandleFunc("/api/captures/", func(w http.ResponseWriter, r *http.Request) {
@@ -713,6 +818,35 @@ func buildUIHandler(store *captureStore, broker *sseBroker) http.Handler {
 		default:
 			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
+		}
+	})
+
+	// GET /api/rules -> []ColorRule
+	mux.HandleFunc("/api/rules", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(rules.getAll())
+		case http.MethodPut:
+			// Replace the full ruleset
+			var incoming []ColorRule
+			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			// Basic validation: ensure IDs exist
+			for i := range incoming {
+				if strings.TrimSpace(incoming[i].ID) == "" {
+					incoming[i].ID = fmt.Sprintf("%d", time.Now().UnixNano()+int64(i))
+				}
+			}
+			// Ensure server canonical order: highest priority first.
+			sort.SliceStable(incoming, func(i, j int) bool { return incoming[i].Priority > incoming[j].Priority })
+			rules.replace(incoming)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"updated": len(incoming)})
+		default:
+			http.Error(w, "method", http.StatusMethodNotAllowed)
 		}
 	})
 

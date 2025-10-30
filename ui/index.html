@@ -366,7 +366,7 @@
 
         /* Editor form */
         .crm-form { display: grid; gap: 10px; margin-bottom: 10px; }
-        .crm-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: 10px; align-items: end; }
+        .crm-row { display: grid; grid-template-columns: 1.5fr 2fr auto 120px; gap: 10px; align-items: end; }
         .crm-field { display: grid; gap: 6px; }
         .crm-field > label { font-size: 12px; color: var(--muted); }
         .crm-field input[type="text"] {
@@ -575,18 +575,12 @@
         <div class="modal-body">
             <!-- Command palette / help -->
             <div class="crm-help">
-                <div class="crm-help-title">Commands</div>
-                <ul class="crm-help-list">
-                    <li><kbd>A</kbd> Add new rule</li>
-                    <li><kbd>E</kbd> Edit selected rule</li>
-                    <li><kbd>T</kbd> Toggle enable/disable</li>
-                    <li><kbd>Del</kbd> Delete selected rule</li>
-                </ul>
                 <div class="crm-hint">Query syntax is identical to the main filter (supports regex, headers, bodies).</div>
+                <div class="crm-hint">Priority is a number with the higher priority rules being processed first, and once matched no other rules are applied</div>
             </div>
 
             <!-- Editor -->
-            <form id="crmForm" class="crm-form" autocomplete="off">
+            <form id="crmForm" class="crm-form" autocomplete="off" novalidate>
                 <div class="crm-field">
                     <label>Query</label>
                     <input id="crmQuery" type="text" placeholder="e.g. status:5 or header:x-trace-id=/[A-F0-9-]+/i" />
@@ -597,7 +591,7 @@
                         <div class="crm-color-row">
                             <span id="crmColorDot" class="crm-color-dot" aria-hidden="true"></span>
                             <input id="crmColor" type="text" placeholder="#e91e63 or hsl(...)" />
-                            <input id="crmColorWell" type="color" aria-label="Pick color" />
+                            <input id="crmColorWell" type="color" value="#000000" aria-label="Pick color" />
                         </div>
                     </div>
                     <div class="crm-field">
@@ -607,6 +601,10 @@
                     <div class="crm-field">
                         <label>Enabled</label>
                         <input id="crmEnabled" type="checkbox" checked />
+                    </div>
+                    <div class="crm-field">
+                        <label>Priority</label>
+                        <input id="crmPriority" type="number" step="1" placeholder="0" value="0" />
                     </div>
                 </div>
                 <div class="crm-actions">
@@ -622,6 +620,7 @@
                     <thead>
                     <tr>
                         <th style="width:60px">State</th>
+                        <th style="width:90px">Priority</th>
                         <th style="width:60px">Color</th>
                         <th>Query</th>
                         <th>Note</th>

@@ -2,8 +2,6 @@ let captures = [];   // newest-first
 let selectedId = null;
 let filterText = '';
 
-const API_LIST = '/api/captures';
-const API_GET  = (id) => `/api/captures/${id}`;
 
 
 function init() {
@@ -76,16 +74,24 @@ async function bindUI() {
 
 async function loadInitial() {
     try {
-        const r = await fetch(API_LIST);
+        const r = await fetch('/api/data');
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const arr = await r.json();
-        captures = (arr || []).reverse(); // newest first
+        const data = await r.json(); // { captures: [], color_rules: [] }
+        captures = (data.captures || []).reverse();
+        await refreshRulesFromServer();
+        console.debug('[CRM] rules type at open:', Object.prototype.toString.call(COLOR_RULES));
         renderList();
-        if (captures.length) {
-            selectCapture(captures[0].id);
-        }
+        if (captures.length) selectCapture(captures[0].id);
     } catch (e) {
         console.error('initial fetch failed:', e);
+        // Fallback: old servers without /api/data
+        const r2 = await fetch('/api/captures');
+        if (r2.ok) {
+            const arr = await r2.json();
+            captures = (arr || []).reverse();
+            renderList();
+            if (captures.length) selectCapture(captures[0].id);
+        }
     }
 }
 
@@ -819,7 +825,7 @@ function buildPythonFromCapture(c) {
     return lines.join('\n');
 }
 
-// ---- Color rule model (persisted in localStorage) --------------------------
+// ---- Color rule model --------------------------
 /*
 Rule schema:
 {
@@ -830,23 +836,60 @@ Rule schema:
   enabled: boolean
 }
 */
-const COLOR_RULES_KEY = 'colorRules.json';
+// Synchronous cache (array) — never a Promise
+let COLOR_RULES = [];
 
-function loadColorRules() {
-    try {
-        const raw = localStorage.getItem(COLOR_RULES_KEY);
-        const arr = raw ? JSON.parse(raw) : [];
-        return Array.isArray(arr) ? arr : [];
-    } catch { return []; }
+// Optional: setter if you mutate client-side then persist
+function setColorRules(next) {
+    COLOR_RULES = Array.isArray(next) ? next : [];
 }
-function saveColorRules(rules) {
-    try { localStorage.setItem(COLOR_RULES_KEY, JSON.stringify(rules || [])); }
-    catch { /* ignore */ }
+async function loadColorRules()  { COLOR_RULES = await fetchColorRules(); return COLOR_RULES; }
+function getColorRulesSync()     { return COLOR_RULES.slice(); }
+async function saveColorRules(nextRules) {
+    // Normalize to array and update cache first
+    COLOR_RULES = Array.isArray(nextRules) ? nextRules.slice() : [];
+    // Persist; ignore response payload (usually {updated: N})
+    await fetch('/api/rules', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(COLOR_RULES),
+    });
+}async function fetchColorRules() {
+    const r = await fetch('/api/rules');
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json(); // []ColorRule
+}
+async function putColorRules(all) {
+    const r = await fetch('/api/rules', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(all || []),
+    });
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json();
+}
+// One-shot refresh from server; call during bootstrap and after edits
+async function refreshRulesFromServer() {
+    try {
+        const r = await fetch('/api/rules');
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        COLOR_RULES = await r.json();         // <-- array
+        renderList();                         // repaint swatches
+        if (selectedId) {
+            const cur = (captures || []).find(x => x.id === selectedId);
+            if (cur) renderDetails(cur);        // refresh badge/editor
+        }
+    } catch (e) {
+        console.error('[UI] refreshRulesFromServer failed:', e);
+        COLOR_RULES = []; // fail-safe
+    }
 }
 
 // Evaluate rules in order; return the *first* matching enabled rule or null
 function findMatchingRule(capture) {
-    const rules = loadColorRules();
+    const rules = getColorRulesSync();
+    if (!Array.isArray(rules) || rules.length === 0) return null;
+
     for (const r of rules) {
         if (!r || !r.enabled) continue;
         const q = (r.query || '').trim();
@@ -933,6 +976,7 @@ async function openColorRulesManager() {
     const cEl    = document.getElementById('crmColor');
     const nEl    = document.getElementById('crmNote');
     const eEl    = document.getElementById('crmEnabled');
+    const pEl    = document.getElementById('crmPriority');
     const addBtn = document.getElementById('crmAdd');
     const saveBtn= document.getElementById('crmSave');
     const clrBtn = document.getElementById('crmClear');
@@ -942,7 +986,9 @@ async function openColorRulesManager() {
 
     if (!root) { console.error('ColorRules modal HTML missing'); return; }
 
-    let rules = loadColorRules();
+    await refreshRulesFromServer();
+    let rules = getColorRulesSync();
+    if (!Array.isArray(rules)) { rules = []; }
     let selIdx = -1; // selected row index; -1 = none
 
     // Normalize arbitrary CSS color strings to computed rgb(a) form, or null if invalid.
@@ -1004,7 +1050,7 @@ async function openColorRulesManager() {
 
     function clearEditor() {
         form.reset();
-        qEl.value = ''; cEl.value = ''; nEl.value = ''; eEl.checked = true;
+        qEl.value = ''; cEl.value = ''; nEl.value = ''; eEl.checked = true; pEl.value = 0;
         saveBtn.disabled = true;
         selIdx = -1;
         colorDot.style.background = 'transparent';
@@ -1013,10 +1059,12 @@ async function openColorRulesManager() {
     }
 
     function readEditor() {
+        const pr = parseInt((pEl && pEl.value) ? pEl.value : '0', 10);
         return {
             query: (qEl.value || '').trim(),
             color: (cEl.value || '').trim(),
             note:  (nEl.value || '').trim(),
+            priority: Number.isFinite(pr) ? pr : 0,
             enabled: !!eEl.checked
         };
     }
@@ -1026,6 +1074,7 @@ async function openColorRulesManager() {
         cEl.value = rule.color || '';
         nEl.value = rule.note  || '';
         eEl.checked = !!rule.enabled;
+        if (pEl) pEl.value = String(Number.isFinite(rule.priority) ? rule.priority : 0);
         // refresh preview + well
         updateColorPreviewFromText();
     }
@@ -1043,6 +1092,9 @@ async function openColorRulesManager() {
             const tdState = document.createElement('td');
             tdState.className = 'state';
             tdState.textContent = r.enabled ? '✅' : '⛔';
+
+            const tdPriority = document.createElement('td');
+            tdPriority.textContent = Number.isFinite(r.priority) ? String(r.priority) : '0';
 
             const tdColor = document.createElement('td');
             const dot = document.createElement('span');
@@ -1119,6 +1171,7 @@ async function openColorRulesManager() {
             };
 
             tr.appendChild(tdState);
+            tr.appendChild(tdPriority);
             tr.appendChild(tdColor);
             tr.appendChild(tdQuery);
             tr.appendChild(tdNote);
@@ -1139,24 +1192,40 @@ async function openColorRulesManager() {
     }
 
     // Wire editor actions
-    form.onsubmit = (e) => {
+    form.onsubmit = async (e) => {
         e.preventDefault();
+        if (!Array.isArray(rules)) rules = [];
         const r = readEditor();
-        if (!r.query) { setStatus('Query is required'); qEl.focus(); return; }
-        rules.push({ id: String(Date.now()), ...r });
-        saveColorRules(rules);
+        if (!r.query) {
+            setStatus('Query is required');
+            qEl.focus();
+            return;
+        }
+        const newRule = { id: String(Date.now()), ...r };
+        rules.push(newRule);
+        await saveColorRules(rules);
+        // Re-fetch canonical, priority-sorted order from server
+        await refreshRulesFromServer();
+        rules = getColorRulesSync();
         renderTable();
         clearEditor();
         setStatus('Added');
         syncUIAfterChange();
     };
 
-    saveBtn.onclick = () => {
+    saveBtn.onclick = async () => {
         if (selIdx < 0 || selIdx >= rules.length) return;
         const r = readEditor();
-        if (!r.query) { setStatus('Query is required'); qEl.focus(); return; }
+        if (!r.query) {
+            setStatus('Query is required');
+            qEl.focus();
+            return;
+        }
         rules[selIdx] = { ...rules[selIdx], ...r };
-        saveColorRules(rules);
+        await saveColorRules(rules);
+        // Re-fetch canonical, priority-sorted order from server
+        await refreshRulesFromServer();
+        rules = getColorRulesSync();
         renderTable();
         saveBtn.disabled = true;
         setStatus('Saved');
@@ -1168,19 +1237,6 @@ async function openColorRulesManager() {
     // Keyboard shortcuts
     root.onkeydown = (e) => {
         if (e.key === 'Escape') { close(); }
-        else if (e.key.toLowerCase() === 'a') { e.preventDefault(); clearEditor(); qEl.focus(); }
-        else if (e.key.toLowerCase() === 'e') { if (selIdx >= 0) { writeEditor(rules[selIdx]); saveBtn.disabled = false; qEl.focus(); } }
-        else if (e.key.toLowerCase() === 't') { if (selIdx >= 0) { rules[selIdx].enabled = !rules[selIdx].enabled; saveColorRules(rules); renderTable(); syncUIAfterChange(); } }
-        else if (e.key === 'Delete') {
-            if (selIdx >= 0) {
-                if (!confirm('Delete this rule?')) return;
-                rules.splice(selIdx, 1);
-                saveColorRules(rules);
-                renderTable();
-                clearEditor();
-                syncUIAfterChange();
-            }
-        }
     };
 
     // Open + focus mgmt
