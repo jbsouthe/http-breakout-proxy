@@ -937,11 +937,65 @@ async function openColorRulesManager() {
     const saveBtn= document.getElementById('crmSave');
     const clrBtn = document.getElementById('crmClear');
     const status = document.getElementById('crmStatus');
+    const colorDot  = document.getElementById('crmColorDot');
+    const colorWell = document.getElementById('crmColorWell');
 
     if (!root) { console.error('ColorRules modal HTML missing'); return; }
 
     let rules = loadColorRules();
     let selIdx = -1; // selected row index; -1 = none
+
+    // Normalize arbitrary CSS color strings to computed rgb(a) form, or null if invalid.
+    function normalizeCssColor(str) {
+        if (!str) return null;
+        const el = document.createElement('span');
+        el.style.color = '#000';
+        // try apply
+        el.style.color = String(str);
+        // If browser rejects it, style.color remains empty or unchanged; compute robustly:
+        document.body.appendChild(el);
+        const computed = getComputedStyle(el).color; // "rgb(r, g, b)" or "rgba(r,g,b,a)"
+        document.body.removeChild(el);
+        // Reject if computed is empty or default
+        if (!computed || computed === 'rgb(0, 0, 0)' && !/^#?0+$|^black$/i.test(String(str).trim())) {
+            // Heuristic: if input not explicitly black and computed is black, it might be invalid; still accept known tokens.
+            // You can relax this if you want black to be accepted without ambiguity:
+            if (!/^(#0+|black)$/i.test(String(str).trim())) return null;
+        }
+        return computed;
+    }
+
+    // Convert computed "rgb(...)" to 6-digit hex for the color well.
+    function rgbToHex(rgb) {
+        const m = rgb.match(/rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+        if (!m) return null;
+        const toHex = (n) => ('0' + Math.max(0, Math.min(255, parseInt(n, 10))).toString(16)).slice(-2);
+        return '#' + toHex(m[1]) + toHex(m[2]) + toHex(m[3]);
+    }
+
+    // Update the preview dot (and optionally color well) from the text field.
+    function updateColorPreviewFromText() {
+        const raw = cEl.value.trim();
+        const norm = normalizeCssColor(raw);
+        if (norm) {
+            colorDot.style.background = norm;
+            const hex = rgbToHex(norm);
+            if (hex && colorWell) colorWell.value = hex;
+            cEl.classList.remove('input-error');
+        } else {
+            colorDot.style.background = 'transparent';
+            cEl.classList.add('input-error');
+        }
+    }
+
+    // Update the text field from the color well (always hex) and preview.
+    function updateFromWell() {
+        if (!colorWell) return;
+        const v = colorWell.value; // e.g., "#e91e63"
+        if (!v) return;
+        cEl.value = v;
+        colorDot.style.background = v;
+    }
 
     function setStatus(msg) {
         status.textContent = msg || '';
@@ -953,6 +1007,8 @@ async function openColorRulesManager() {
         qEl.value = ''; cEl.value = ''; nEl.value = ''; eEl.checked = true;
         saveBtn.disabled = true;
         selIdx = -1;
+        colorDot.style.background = 'transparent';
+        if (colorWell) colorWell.value = '#000000';
         highlightRow();
     }
 
@@ -970,6 +1026,8 @@ async function openColorRulesManager() {
         cEl.value = rule.color || '';
         nEl.value = rule.note  || '';
         eEl.checked = !!rule.enabled;
+        // refresh preview + well
+        updateColorPreviewFromText();
     }
 
     function highlightRow() {
@@ -1000,28 +1058,66 @@ async function openColorRulesManager() {
 
             const tdAct = document.createElement('td');
             tdAct.className = 'row-actions';
-            const btnEdit = document.createElement('button');
-            btnEdit.className = 'btn btn-muted'; btnEdit.textContent = 'Edit';
-            const btnToggle = document.createElement('button');
-            btnToggle.className = 'btn btn-muted'; btnToggle.textContent = r.enabled ? 'Disable' : 'Enable';
-            const btnDel = document.createElement('button');
-            btnDel.className = 'btn'; btnDel.textContent = 'Delete';
 
-            btnEdit.onclick = () => { selIdx = i; writeEditor(rules[i]); saveBtn.disabled = false; highlightRow(); };
+            const btnEdit = document.createElement('button');
+            btnEdit.className = 'btn btn-muted';
+            btnEdit.type = 'button';
+            btnEdit.textContent = 'Edit';
+
+            const btnToggle = document.createElement('button');
+            btnToggle.className = 'btn btn-muted';
+            btnToggle.type = 'button';
+            btnToggle.textContent = r.enabled ? 'Disable' : 'Enable';
+
+            const btnDel = document.createElement('button');
+            btnDel.className = 'btn';
+            btnDel.type = 'button';
+            btnDel.textContent = 'Delete';
+            btnDel.title = 'Delete this rule';
+
+            btnEdit.onclick = () => {
+                selIdx = i;
+                writeEditor(rules[i]);
+                saveBtn.disabled = false;
+                highlightRow();
+            };
+
             btnToggle.onclick = () => {
                 rules[i].enabled = !rules[i].enabled;
-                saveColorRules(rules); renderTable(); setStatus('Toggled');
-                syncUIAfterChange();
-            };
-            btnDel.onclick = () => {
-                rules.splice(i,1);
-                saveColorRules(rules); renderTable(); setStatus('Deleted');
-                // if deleted selected, clear editor
-                if (selIdx === i) clearEditor();
+                saveColorRules(rules);
+                renderTable();
+                setStatus(rules[i].enabled ? 'Enabled' : 'Disabled');
                 syncUIAfterChange();
             };
 
-            tr.onclick = () => { selIdx = i; writeEditor(rules[i]); saveBtn.disabled = false; highlightRow(); };
+            btnDel.onclick = () => {
+                // optional confirm; remove if you prefer one-click delete
+                if (!confirm('Delete this rule? This cannot be undone.')) return;
+                rules.splice(i, 1);
+                saveColorRules(rules);
+                renderTable();
+                // if the deleted row was selected, clear the editor
+                if (selIdx === i) clearEditor();
+                // keep selection in bounds
+                if (selIdx > i) selIdx -= 1;
+                highlightRow();
+                setStatus('Deleted');
+                syncUIAfterChange();
+            };
+
+            tdAct.appendChild(btnEdit);
+            tdAct.appendChild(btnToggle);
+            tdAct.appendChild(btnDel);
+
+            tr.onclick = (ev) => {
+                // avoid row click when clicking action buttons
+                if (ev.target instanceof HTMLElement && ev.target.closest('.row-actions')) return;
+                selIdx = i;
+                writeEditor(rules[i]);
+                saveBtn.disabled = false;
+                highlightRow();
+            };
+
             tr.appendChild(tdState);
             tr.appendChild(tdColor);
             tr.appendChild(tdQuery);
@@ -1072,15 +1168,18 @@ async function openColorRulesManager() {
     // Keyboard shortcuts
     root.onkeydown = (e) => {
         if (e.key === 'Escape') { close(); }
-        else if (e.key.toLowerCase() === 'a') { e.preventDefault(); clearEditor(); qEl.focus(); }     // Add
-        else if (e.key.toLowerCase() === 'e') {                                                       // Edit
-            if (selIdx >= 0) { writeEditor(rules[selIdx]); saveBtn.disabled = false; qEl.focus(); }
-        }
-        else if (e.key.toLowerCase() === 't') {                                                       // Toggle
-            if (selIdx >= 0) { rules[selIdx].enabled = !rules[selIdx].enabled; saveColorRules(rules); renderTable(); syncUIAfterChange(); }
-        }
-        else if (e.key === 'Delete') {                                                                // Delete
-            if (selIdx >= 0) { rules.splice(selIdx,1); saveColorRules(rules); renderTable(); clearEditor(); syncUIAfterChange(); }
+        else if (e.key.toLowerCase() === 'a') { e.preventDefault(); clearEditor(); qEl.focus(); }
+        else if (e.key.toLowerCase() === 'e') { if (selIdx >= 0) { writeEditor(rules[selIdx]); saveBtn.disabled = false; qEl.focus(); } }
+        else if (e.key.toLowerCase() === 't') { if (selIdx >= 0) { rules[selIdx].enabled = !rules[selIdx].enabled; saveColorRules(rules); renderTable(); syncUIAfterChange(); } }
+        else if (e.key === 'Delete') {
+            if (selIdx >= 0) {
+                if (!confirm('Delete this rule?')) return;
+                rules.splice(selIdx, 1);
+                saveColorRules(rules);
+                renderTable();
+                clearEditor();
+                syncUIAfterChange();
+            }
         }
     };
 
@@ -1102,6 +1201,14 @@ async function openColorRulesManager() {
     }
 
     root.addEventListener('click', clickClose);
+    // Live preview while typing
+    cEl.addEventListener('input', updateColorPreviewFromText);
+
+    // Sync when the color well changes
+    if (colorWell) {
+        colorWell.addEventListener('input', updateFromWell);
+        colorWell.addEventListener('change', updateFromWell);
+    }
     open();
 }
 
