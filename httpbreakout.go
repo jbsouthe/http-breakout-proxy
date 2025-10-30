@@ -39,11 +39,15 @@ import (
 //go:embed ui/*
 var uiFS embed.FS
 var paused atomic.Bool
+var verbose atomic.Bool
 
 var (
 	maxStoredBody    = 1 << 20 // 1 MB per body
 	maxStoredEntries = 1000    // circular buffer size
 )
+
+func setVerbose(b bool) { verbose.Store(b) }
+func isVerbose() bool   { return verbose.Load() }
 
 type PersistedData struct {
 	Captures   []Capture   `json:"captures"`
@@ -602,19 +606,21 @@ func createEphemeralCA() (*x509.Certificate, *rsa.PrivateKey, error) {
 func main() {
 	// CLI flags (match README)
 	var (
-		listen     = flag.String("listen", "127.0.0.1:8080", "address for proxy + UI to listen on (single-port mode)")
-		mitm       = flag.Bool("mitm", true, "enable HTTPS MITM (requires installing CA in clients)")
-		caDir      = flag.String("ca-dir", "./ca", "directory to store persistent CA cert and key")
-		persist    = flag.String("persist", "./captures.json", "path to captures persistence file (e.g. ./captures.json). empty = no persistence")
+		listen     = flag.String("l", "127.0.0.1:8080", "address for proxy + UI to listen on (single-port mode)")
+		mitm       = flag.Bool("mitm", true, "enable HTTPS Man In The Middle mode (requires installing CA in clients)")
+		caDir      = flag.String("ca", "./ca", "directory to store persistent CA cert and key")
+		persist    = flag.String("f", "./captures.json", "path to captures persistence file (e.g. ./captures.json). empty = no persistence")
 		maxBody    = flag.Int("max-body", maxStoredBody, "maximum bytes to store/display per request/response body")
 		bufferSize = flag.Int("buffer-size", maxStoredEntries, "circular buffer capacity for captured entries")
-		verbose    = flag.Bool("verbose", false, "enable verbose logging")
+		verbose    = flag.Bool("v", false, "enable verbose logging")
 	)
 	flag.Parse()
 
-	if *verbose {
-		log.Printf("Flags: listen=%s mitm=%v ca-dir=%s persist=%s max-body=%d buffer-size=%d",
-			*listen, *mitm, *caDir, *persist, *maxBody, *bufferSize)
+	setVerbose(*verbose)
+
+	if isVerbose() {
+		log.Printf("Flags: listen=%s mitm=%v ca=%s file=%s max-body=%d buffer-size=%d verbose=%s",
+			*listen, *mitm, *caDir, *persist, *maxBody, *bufferSize, *verbose)
 	}
 
 	// Apply runtime-configurable constants (if you prefer to keep package-level consts, you can copy/assign)
@@ -711,6 +717,9 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) ht
 
 	// /api/captures  (list + clear)
 	mux.HandleFunc("/api/captures", func(w http.ResponseWriter, r *http.Request) {
+		if isVerbose() {
+			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
+		}
 		switch r.Method {
 		case http.MethodGet:
 			list := store.list()
@@ -739,6 +748,9 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) ht
 
 	// GET /api/data -> PersistedData
 	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
+		if isVerbose() {
+			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
+		}
 		if r.Method != http.MethodGet {
 			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
@@ -751,6 +763,9 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) ht
 	})
 
 	mux.HandleFunc("/api/captures/", func(w http.ResponseWriter, r *http.Request) {
+		if isVerbose() {
+			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
+		}
 		// expect /api/captures/{id}
 		const prefix = "/api/captures/"
 		if !strings.HasPrefix(r.URL.Path, prefix) {
@@ -823,6 +838,9 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) ht
 
 	// GET /api/rules -> []ColorRule
 	mux.HandleFunc("/api/rules", func(w http.ResponseWriter, r *http.Request) {
+		if isVerbose() {
+			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
+		}
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
@@ -852,6 +870,9 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) ht
 
 	// SSE events
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		if isVerbose() {
+			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
+		}
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -884,6 +905,9 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) ht
 	})
 
 	mux.HandleFunc("/api/pause", func(w http.ResponseWriter, r *http.Request) {
+		if isVerbose() {
+			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
+		}
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
@@ -948,7 +972,7 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 
 	// Capture request
 	proxy.OnRequest().DoFunc(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		log.Printf("Request: %s", r.URL.String())
+		log.Printf("Proxy Request: %s %s", r.Method, r.URL.String())
 		if isPaused() {
 			// Do not record; just pass through unchanged.
 			return r, nil

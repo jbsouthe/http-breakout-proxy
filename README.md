@@ -55,15 +55,15 @@ Captured traffic will appear in the web UI.
 
 ## Command-Line Arguments
 
-| Flag | Default          | Description |
-|------|------------------|-------------|
-| `-listen` | `127.0.0.1:8080` | Address for the proxy to listen on as well as a UI app. |
-| `-mitm` | `true`           | Enable HTTPS MITM interception (generates a local CA for intercepting TLS). |
-| `-ca-dir` | `./ca`           | Directory in which generated CA certificate and key are stored when MITM is enabled and persistence is chosen. |
-| `-persist` | `./captures.json`  | Optional path or directory for persisting captures to disk (e.g., `./captures.json`). |
-| `-max-body` | `1048576`        | Maximum number of bytes (per body) to store/display; larger bodies are truncated with a sentinel. |
-| `-buffer-size` | `1000`           | Circular buffer capacity for in-memory captures. |
-| `-verbose` | `false`          | Enable verbose logging for debugging. |
+| Flag           | Default          | Description                                                                                                    |
+|----------------|------------------|----------------------------------------------------------------------------------------------------------------|
+| `-l`           | `127.0.0.1:8080` | Address for the proxy to listen on as well as a UI app.                                                        |
+| `-mitm`        | `true`           | Enable HTTPS Man In The Middle mode (MITM) interception (generates a local CA for intercepting TLS).           |
+| `-ca`          | `./ca`           | Directory in which generated CA certificate and key are stored when MITM is enabled and persistence is chosen. |
+| `-f`           | `./captures.json`  | Optional path or directory for persisting captures to disk (e.g., `./captures.json`).                          |
+| `-max-body`    | `1048576`        | Maximum number of bytes (per body) to store/display; larger bodies are truncated with a sentinel.              |
+| `-buffer-size` | `1000`           | Circular buffer capacity for in-memory captures.                                                               |
+| `-v`           | `false`          | Enable verbose logging for debugging.                                                                          |
 
 > Use `./http-breakout-proxy -h` to list available flags and usage descriptions.
 
@@ -101,9 +101,9 @@ Examples:
 
 ## HTTPS Interception (MITM)
 
-When MITM is enabled:
+When Man In The Middle mode is enabled:
 
-1. The proxy generates an RSA CA key pair and a root certificate and stores them in `-ca-dir` (default `./ca`).
+1. The proxy generates an RSA CA key pair and a root certificate and stores them in `-ca` (default `./ca`).
 2. To inspect HTTPS traffic you must add the generated CA certificate (`ca.pem` or similar) to the trust store of the client (or system) issuing requests. On many platforms this requires administrative privileges.
 3. The proxy performs TLS interception by issuing leaf certificates signed by the local CA for each hostname requested by the client.
 
@@ -113,7 +113,7 @@ When MITM is enabled:
 
 ## Persistence
 
-If persistence is enabled (via `-persist` or configured path):
+If persistence is enabled (via `-f` or configured path):
 
 - Captures are periodically written to disk (e.g., `captures.json`).
 - On startup, the application will attempt to load prior captures from the persistence file into the in-memory buffer (preserving ordering).
@@ -202,7 +202,7 @@ Description=HTTP Breakout Proxy
 After=network.target
 
 [Service]
-ExecStart=/opt/http-breakout-proxy/http-breakout-proxy -listen 0.0.0.0:8080
+ExecStart=/opt/http-breakout-proxy/http-breakout-proxy -l 0.0.0.0:8080
 Restart=on-failure
 User=proxy
 Group=proxy
@@ -259,8 +259,3 @@ This project is distributed under the **MIT License**. See `LICENSE` for details
 
 Author: John Southerland (GitHub: `jbsouthe`)  
 Project: `http-breakout-proxy` — intended for debugging, development, and learning about HTTP behavior.
-"""
-
-output_path = Path("/mnt/data/README.md")
-output_path.write_text(readme_text)
-output_path
