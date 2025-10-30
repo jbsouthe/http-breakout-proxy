@@ -211,6 +211,205 @@
         .but-danger { border-color: rgba(220,38,38,0.5) !important }
         .but-danger:hover { border-color: rgba(220,38,38,0.9) !important }
 
+        /* colors, because they help in analysis */
+        /* Left color bar in list rows */
+        #list .row {
+            position: relative;
+            padding-left: 10px;   /* space for the swatch */
+        }
+        #list .row .swatch {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;            /* full row height */
+            width: 6px;
+            background: transparent; /* set by JS when matched */
+            border-radius: 2px;
+        }
+
+        /* Optional badge in details header */
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            line-height: 1.4;
+            background: #eee;
+            color: #333;
+            margin-left: 8px;
+            vertical-align: baseline;
+            border: 1px solid rgba(0,0,0,.08);
+        }
+
+        #colorRuleNoteInput.badge {
+            border: 1px solid rgba(0,0,0,.12);
+            background: #fff;
+            color: #222;
+        }
+
+        :root{
+            --accent:#1f6feb;
+            --muted:#9aa4b2;
+            --bg:#0f1720;
+            --surface:#071526;
+            --surface2:#041225;
+            --text:#e6eef8;
+            --border: rgba(255,255,255,0.10);
+        }
+
+        .modal-root {
+            position: fixed; inset: 0;
+            display: none;
+            z-index: 1000;
+        }
+        .modal-root[aria-hidden="false"] { display: block; }
+
+        .modal-backdrop {
+            position: absolute; inset: 0;
+            background: rgba(0,0,0,.55);
+        }
+
+        .modal-dialog {
+            position: absolute;
+            top: 8vh; left: 50%;
+            transform: translateX(-50%);
+            width: min(90vw, 720px);
+            min-width: 360px;
+            max-width: 1200px;
+            height: auto;
+            max-height: 86vh;
+
+            background: linear-gradient(180deg, var(--surface), var(--surface2));
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 16px 48px rgba(0,0,0,.5);
+
+            display: flex; flex-direction: column;
+
+            /* User-resizable */
+            resize: both;
+            overflow: auto;
+        }
+
+        .modal-head {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 14px; border-bottom: 1px solid var(--border);
+        }
+        .modal-title { margin: 0; font-size: 16px; font-weight: 600; }
+        .modal-x {
+            background: transparent; color: var(--muted);
+            border: 1px solid transparent; border-radius: 8px;
+            padding: 4px 8px; cursor: pointer;
+        }
+        .modal-x:hover { color: var(--text); border-color: var(--border); }
+
+        .modal-body {
+            padding: 14px; display: grid; gap: 10px;
+        }
+        .modal-label { font-size: 12px; color: var(--muted); }
+
+        .modal-input {
+            width: 100%;
+            background: rgba(255,255,255,0.06);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            outline: none;
+        }
+        .modal-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(31,111,235,.25); }
+
+        .modal-textarea { min-height: 160px; resize: vertical; }
+
+        .modal-foot {
+            display: flex; gap: 8px; justify-content: flex-end;
+            padding: 12px 14px; border-top: 1px solid var(--border);
+        }
+
+        .btn {
+            padding: 8px 12px; border-radius: 8px; cursor: pointer;
+            border: 1px solid var(--border); background: rgba(255,255,255,0.04); color: var(--text);
+        }
+        .btn:hover { border-color: var(--accent); }
+        .btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+        .btn-muted { color: var(--muted); }
+
+        /* Larger dialog for manager */
+        .color-rules-dialog {
+            width: min(96vw, 1100px);
+            height: min(90vh, 820px);
+            display: flex;
+            flex-direction: column;
+            resize: both;
+        }
+
+        /* Help/commands */
+        .crm-help {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 12px;
+            background: rgba(255,255,255,0.03);
+            margin-bottom: 12px;
+        }
+        .crm-help-title { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+        .crm-help-list { display: flex; gap: 16px; flex-wrap: wrap; margin: 0; padding-left: 0; list-style: none; }
+        .crm-help-list kbd {
+            font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+            background: rgba(255,255,255,0.08);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 2px 6px;
+            font-size: 12px;
+        }
+        .crm-hint { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+        /* Editor form */
+        .crm-form { display: grid; gap: 10px; margin-bottom: 10px; }
+        .crm-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: 10px; align-items: end; }
+        .crm-field { display: grid; gap: 6px; }
+        .crm-field > label { font-size: 12px; color: var(--muted); }
+        .crm-field input[type="text"] {
+            background: rgba(255,255,255,0.06);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 10px;
+            outline: none;
+        }
+        .crm-field input[type="text"]:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(31,111,235,.25);
+        }
+        .crm-actions { display: flex; gap: 8px; }
+
+        /* Table */
+        .crm-table-wrap { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+        .crm-table { width: 100%; border-collapse: collapse; }
+        .crm-table thead th {
+            position: sticky; top: 0;
+            background: rgba(255,255,255,0.04);
+            border-bottom: 1px solid var(--border);
+            padding: 8px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .crm-table tbody td {
+            border-bottom: 1px solid var(--border);
+            padding: 8px;
+            vertical-align: top;
+            font-size: 13px;
+        }
+        .crm-table .swatch-dot {
+            display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+            border: 1px solid var(--border);
+        }
+        .crm-table .state { opacity: .85; }
+        .crm-table tr.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+        .crm-table .row-actions { display: flex; gap: 6px; }
+        .crm-status { font-size: 12px; color: var(--muted); }
+
         /* responsive */
         @media (max-width:900px){
             #app{grid-template-columns:1fr; grid-auto-rows: auto; padding:10px}
@@ -227,6 +426,7 @@
 
         <!-- Reuse existing IDs so JS stays the same -->
         <input id="filterInput" placeholder="Filter (free text, method:, status:, host:, url:, body:, header:, regex /…/i)" />
+        <button id="colorRulesBtn" title="Define color tagging rules">Color Rules</button>
         <button id="pauseBtn" class="but" title="Pause Capture">Pause</button>
         <button id="clearBtn" class="but but-danger" title="Clear all captures">Clear</button>
         <a href="/filter-help.html" target="_blank" class="but" title="Open filter syntax reference">Filter Help</a>
@@ -245,6 +445,7 @@
     <div class="details">
         <div class="details-top">
             <div>
+                <span id="colorRuleBadge" class="badge" style="display:none;"></span>
                 <div id="titleLarge" class="titleLarge">No capture selected</div>
                 <div id="subMeta" class="subMeta">Select a request on the left to view details</div>
             </div>
@@ -268,6 +469,14 @@
         <div id="tab-overview" class="tab-pane">
             <div id="content" class="content" role="main">
             <div id="pane-overview" class="pane">
+                <div id="colorRuleNoteWrap" style="display:none; align-items:center; gap:8px; margin-top:6px;">
+                        <span id="colorRuleColorDot" aria-hidden="true"
+                              style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#eee; border:1px solid rgba(0,0,0,.1)"></span>
+                    <input id="colorRuleNoteInput" type="text" class="badge"
+                           style="min-width:280px;"
+                           placeholder="Rule note…">
+                    <span id="colorRuleSaveHint" class="small" style="opacity:.7; display:none;">Saved</span>
+                </div>
                 <div class="kv">
                     <div class="k">Method</div><div id="ov-method" style="color: #ffffff">-</div>
                     <div class="k">URL</div><div id="ov-url" style="color: #ffffff">-</div>
@@ -308,5 +517,97 @@
 <script src="app.js" defer></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<!-- Custom Modal Root -->
+<div id="appModal" class="modal-root" aria-hidden="true">
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="appModalTitle">
+        <div class="modal-head">
+            <h3 id="appModalTitle" class="modal-title">Title</h3>
+            <button class="modal-x" type="button" title="Close" data-close="1">✕</button>
+        </div>
+        <div class="modal-body">
+            <label id="appModalLabel" class="modal-label"></label>
+            <input id="appModalInput" class="modal-input" type="text" />
+            <!-- If you ever need multiline: replace input with a <textarea class="modal-input modal-textarea"></textarea> -->
+        </div>
+        <div class="modal-foot">
+            <button id="appModalCancel" class="btn btn-muted" type="button">Cancel</button>
+            <button id="appModalOK" class="btn btn-primary" type="button">OK</button>
+        </div>
+    </div>
+</div>
+
+<!-- Color Rules Manager -->
+<div id="colorRulesModal" class="modal-root" aria-hidden="true">
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal-dialog color-rules-dialog" role="dialog" aria-modal="true" aria-labelledby="crmTitle">
+        <div class="modal-head">
+            <h3 id="crmTitle" class="modal-title">Color Rules</h3>
+            <button class="modal-x" type="button" title="Close" data-close="1">✕</button>
+        </div>
+
+        <div class="modal-body">
+            <!-- Command palette / help -->
+            <div class="crm-help">
+                <div class="crm-help-title">Commands</div>
+                <ul class="crm-help-list">
+                    <li><kbd>A</kbd> Add new rule</li>
+                    <li><kbd>E</kbd> Edit selected rule</li>
+                    <li><kbd>T</kbd> Toggle enable/disable</li>
+                    <li><kbd>Del</kbd> Delete selected rule</li>
+                </ul>
+                <div class="crm-hint">Query syntax is identical to the main filter (supports regex, headers, bodies).</div>
+            </div>
+
+            <!-- Editor -->
+            <form id="crmForm" class="crm-form" autocomplete="off">
+                <div class="crm-field">
+                    <label>Query</label>
+                    <input id="crmQuery" type="text" placeholder="e.g. status:5 or header:x-trace-id=/[A-F0-9-]+/i" />
+                </div>
+                <div class="crm-row">
+                    <div class="crm-field">
+                        <label>Color</label>
+                        <input id="crmColor" type="text" placeholder="#e91e63 or hsl(...)" />
+                    </div>
+                    <div class="crm-field">
+                        <label>Note</label>
+                        <input id="crmNote" type="text" placeholder="Short badge text for details" />
+                    </div>
+                    <div class="crm-field">
+                        <label>Enabled</label>
+                        <input id="crmEnabled" type="checkbox" checked />
+                    </div>
+                </div>
+                <div class="crm-actions">
+                    <button id="crmAdd"   class="btn btn-primary" type="submit">Add</button>
+                    <button id="crmSave"  class="btn" type="button" disabled>Save</button>
+                    <button id="crmClear" class="btn btn-muted" type="button">Clear</button>
+                </div>
+            </form>
+
+            <!-- Rules table -->
+            <div class="crm-table-wrap">
+                <table id="crmTable" class="crm-table" aria-label="Color rules">
+                    <thead>
+                    <tr>
+                        <th style="width:60px">State</th>
+                        <th style="width:60px">Color</th>
+                        <th>Query</th>
+                        <th>Note</th>
+                        <th style="width:160px">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody><!-- rows injected --></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="modal-foot">
+            <span class="crm-status" id="crmStatus" aria-live="polite"></span>
+            <button class="btn" type="button" data-close="1">Close</button>
+        </div>
+    </div>
+</div>
 </body>
 </html>

@@ -67,6 +67,11 @@ async function bindUI() {
         });
     }
 
+    const colorRulesBtn = document.getElementById('colorRulesBtn');
+    if (colorRulesBtn) {
+        colorRulesBtn.addEventListener('click', openColorRulesManager);
+    }
+
 }
 
 async function loadInitial() {
@@ -177,96 +182,32 @@ function renderList() {
     list.innerHTML = '';
 
     const query = (filterText || '').trim();
-    const terms = query.split(/\s+/).filter(Boolean);
-
-    const filtered = !query ? captures : captures.filter(c => {
-        // Canonical fields (keep originals for regex; add lowercased fast paths when needed)
-        const url     = c.url || '';
-        const method  = c.method || '';
-        const statusS = String(c.response_status ?? '');
-        const host    = (() => { try { return new URL(c.url).host; } catch { return ''; } })();
-
-        const reqBody  = c.request_body  || '';
-        const respBody = c.response_body || '';
-
-        const reqHdrPairs  = headersToPairs(c.request_headers);
-        const respHdrPairs = headersToPairs(c.response_headers);
-
-        return terms.every(term => {
-            // keyed operators (method:, status:, host:, url:)
-            if (term.startsWith('method:')) {
-                const q = parseMaybeRegex(term.slice(7));
-                return matches(method, q);
-            }
-            if (term.startsWith('status:')) {
-                const spec = term.slice(7).toLowerCase();
-                // class (e.g., "4" → any 4xx) vs. exact (e.g., "404")
-                if (/^[1-5]$/.test(spec)) return statusS.startsWith(spec);
-                const q = parseMaybeRegex(spec);
-                return matches(statusS, q);
-            }
-            if (term.startsWith('host:')) {
-                const q = parseMaybeRegex(term.slice(5));
-                return matches(host, q);
-            }
-            if (term.startsWith('url:')) {
-                const q = parseMaybeRegex(term.slice(4));
-                return matches(url, q);
-            }
-
-            // bodies (req/resp or combined)
-            if (term.startsWith('body:')) {
-                const q = parseMaybeRegex(term.slice(5));
-                return matches(reqBody, q) || matches(respBody, q);
-            }
-            if (term.startsWith('req.body:')) {
-                const q = parseMaybeRegex(term.slice(9));
-                return matches(reqBody, q);
-            }
-            if (term.startsWith('resp.body:')) {
-                const q = parseMaybeRegex(term.slice(10));
-                return matches(respBody, q);
-            }
-
-            // headers (req/resp or combined). Support name=value with regex on each side.
-            if (term.startsWith('header:')) {
-                const { nameQ, valueQ } = parseHeaderSpec(term.slice(7));
-                return matchHeaderTerm(reqHdrPairs, nameQ, valueQ) || matchHeaderTerm(respHdrPairs, nameQ, valueQ);
-            }
-            if (term.startsWith('req.header:')) {
-                const { nameQ, valueQ } = parseHeaderSpec(term.slice(11));
-                return matchHeaderTerm(reqHdrPairs, nameQ, valueQ);
-            }
-            if (term.startsWith('resp.header:')) {
-                const { nameQ, valueQ } = parseHeaderSpec(term.slice(12));
-                return matchHeaderTerm(respHdrPairs, nameQ, valueQ);
-            }
-
-            // DEFAULT TERM: search *everywhere* (broad, but efficient)
-            const q = parseMaybeRegex(term);
-            // Cheap scalars first
-            if (matches(url, q) || matches(method, q) || matches(statusS, q) || matches(host, q)) return true;
-            if (matches(reqBody, q) || matches(respBody, q)) return true;
-            // Headers: names and values
-            if (matchHeaderTerm(reqHdrPairs, q, null)) return true;
-            if (matchHeaderTerm(reqHdrPairs, null, q)) return true;
-            if (matchHeaderTerm(respHdrPairs, q, null)) return true;
-            if (matchHeaderTerm(respHdrPairs, null, q)) return true;
-
-            return false;
-        });
-    });
+    const filtered = !query ? captures : captures.filter(c => captureMatchesQuery(c, query));
 
     filtered.slice(0, 1000).forEach(c => {
         const row = document.createElement('div');
         row.className = 'row' + (c.id === selectedId ? ' selected' : '');
         row.setAttribute('data-id', String(c.id));
-        row.setAttribute('role', 'option');            // a11y
+        row.setAttribute('role', 'option');
         row.setAttribute('aria-selected', c.id === selectedId ? 'true' : 'false');
+
+        // Build DOM: swatch + text
+        const sw = document.createElement('span');
+        sw.className = 'swatch';
+
+        const text = document.createElement('span');
         const display = c.name && c.name.trim()
             ? c.name
             : `${c.method} ${c.url} [${c.response_status ?? '-'}]`;
-        row.textContent = display;
+        text.textContent = display;
+
+        // If matching rule, colorize swatch
+        const rule = findMatchingRule(c);
+        if (rule) { sw.style.background = rule.color || 'transparent'; }
+
+        row.appendChild(sw);
+        row.appendChild(text);
+
         row.onclick = () => selectCapture(c.id);
         row.tabIndex = 0;
         row.addEventListener('keydown', e => { if (e.key === 'Enter') selectCapture(c.id); });
@@ -356,7 +297,7 @@ function getStatusText(code) {
     return STATUS_TEXT[code] || "";
 }
 
-function renderDetails(c) {
+async function renderDetails(c) {
     // Map snake_case fields from Go JSON:
     const method = c.method;
     const url = c.url;
@@ -393,7 +334,7 @@ function renderDetails(c) {
             const current = (c.name && c.name.trim())
                 ? c.name
                 : `${c.method} ${c.url} [${c.response_status ?? '-'}]`;
-            const next = window.prompt('New name for this capture:', current);
+            const next = await showPromptModal('New name for this capture:', current);
             if (next == null) return; // cancelled
             const trimmed = next.trim();
 
@@ -453,6 +394,22 @@ function renderDetails(c) {
         };
     }
 
+    // Color rule badge (note)
+    const badge = document.getElementById('colorRuleBadge');
+    if (badge) {
+        const rule = findMatchingRule(c);
+        if (rule) {
+            badge.style.display = '';
+            badge.textContent = 'Tagged';
+            badge.style.background = rule.color || '#eee';
+            // pick readable text color if you like; for now, keep default
+        } else {
+            badge.style.display = 'none';
+            badge.textContent = '';
+            badge.style.background = '';
+        }
+    }
+
     // Assert DOM presence
     if (!title || !sub || !reqHdrEl || !respHdrEl || !reqBodyEl || !respBodyEl || !rawEl || !ovMethod || !ovURL || !ovStatus || !ovDuration || !ovTime) {
         console.error('[UI] Missing one or more detail elements',
@@ -483,6 +440,60 @@ function renderDetails(c) {
     if (deleteBtn) {
         deleteBtn.onclick = () => deleteCapture(c.id, { confirmFirst: true });
     }
+
+    // Editable color-note for matching rule
+    (function applyEditableColorNote(capture) {
+        const wrap   = document.getElementById('colorRuleNoteWrap');
+        const input  = document.getElementById('colorRuleNoteInput');
+        const dot    = document.getElementById('colorRuleColorDot');
+        const saved  = document.getElementById('colorRuleSaveHint');
+
+        if (!wrap || !input || !dot || !saved) return;
+
+        const rule = findMatchingRule(capture);
+        if (!rule) {
+            wrap.style.display = 'none';
+            input.value = '';
+            dot.style.background = '#eee';
+            saved.style.display = 'none';
+            return;
+        }
+
+        // Show and populate
+        wrap.style.display = 'flex';
+        input.value = rule.note || '';
+        dot.style.background = rule.color || '#eee';
+        saved.style.display = 'none';
+
+        // Debounced persistence (avoid stacking multiple listeners by resetting)
+        input.oninput = null;
+        input.onchange = null;
+
+        let t = null;
+        input.oninput = () => {
+            if (t) clearTimeout(t);
+            const v = input.value;
+            t = setTimeout(() => {
+                if (updateColorRuleNote(rule.id, v)) {
+                    saved.style.display = '';
+                    setTimeout(() => (saved.style.display = 'none'), 700);
+                    // Refresh list row text if it uses the rule note anywhere (optional)
+                    renderList();
+                }
+            }, 250);
+        };
+
+        input.onchange = () => {
+            // final sync on blur/enter
+            const v = input.value;
+            if (updateColorRuleNote(rule.id, v)) {
+                saved.style.display = '';
+                setTimeout(() => (saved.style.display = 'none'), 700);
+                renderList();
+            }
+        };
+    })(c);
+
     // Force scroll-to-top of the details panel
     const detailsPanel = document.querySelector('.details');
     if (detailsPanel) detailsPanel.scrollTo({ top: 0, behavior: 'instant' });
@@ -610,10 +621,11 @@ function parseMaybeRegex(term) {
     return { text: term.toLowerCase() };
 }
 
-function matches(hay, q) {
+function matches(hay, q, equals = false) {
     if (hay == null) return false;
     const s = String(hay);
     if (q.regex) return q.regex.test(s);
+    if (equals) return s.toLowerCase() === q.text;
     return s.toLowerCase().includes(q.text);
 }
 
@@ -806,6 +818,400 @@ function buildPythonFromCapture(c) {
     lines.push('print(response.text)');
     return lines.join('\n');
 }
+
+// ---- Color rule model (persisted in localStorage) --------------------------
+/*
+Rule schema:
+{
+  id: string,
+  query: string,   // uses same filter syntax as list filter (supports regex, headers, bodies, etc.)
+  color: string,   // CSS color (e.g., '#e91e63' or 'hsl(210,80%,60%)')
+  note: string,    // short label shown in details
+  enabled: boolean
+}
+*/
+const COLOR_RULES_KEY = 'colorRules.json';
+
+function loadColorRules() {
+    try {
+        const raw = localStorage.getItem(COLOR_RULES_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+}
+function saveColorRules(rules) {
+    try { localStorage.setItem(COLOR_RULES_KEY, JSON.stringify(rules || [])); }
+    catch { /* ignore */ }
+}
+
+// Evaluate rules in order; return the *first* matching enabled rule or null
+function findMatchingRule(capture) {
+    const rules = loadColorRules();
+    for (const r of rules) {
+        if (!r || !r.enabled) continue;
+        const q = (r.query || '').trim();
+        if (!q) continue;
+        if (captureMatchesQuery(capture, q)) return r;
+    }
+    return null;
+}
+// Decide if a capture matches a full query line (space-separated terms; AND semantics)
+function captureMatchesQuery(c, queryLine) {
+    const terms = (queryLine || '').trim().split(/\s+/).filter(Boolean);
+    if (!terms.length) return false;
+
+    // Local shorthands (as in renderList)
+    const url     = c.url || '';
+    const method  = c.method || '';
+    const statusS = String(c.response_status ?? '');
+    const host    = (() => { try { return new URL(c.url).host; } catch { return ''; } })();
+
+    const reqBody  = c.request_body  || '';
+    const respBody = c.response_body || '';
+
+    const reqHdrPairs  = headersToPairs(c.request_headers);
+    const respHdrPairs = headersToPairs(c.response_headers);
+
+    return terms.every(term => {
+        if (term.startsWith('method:')) {
+            const q = parseMaybeRegex(term.slice(7)); return matches(method, q, true);
+        }
+        if (term.startsWith('status:')) {
+            const spec = term.slice(7).toLowerCase();
+            if (/^[1-5]$/.test(spec)) return statusS.startsWith(spec);
+            const q = parseMaybeRegex(spec); return matches(statusS, q);
+        }
+        if (term.startsWith('host:')) {
+            const q = parseMaybeRegex(term.slice(5)); return matches(host, q, true);
+        }
+        if (term.startsWith('url:')) {
+            const q = parseMaybeRegex(term.slice(4)); return matches(url, q, true);
+        }
+        if (term.startsWith('body:')) {
+            const q = parseMaybeRegex(term.slice(5));
+            return matches(reqBody, q) || matches(respBody, q);
+        }
+        if (term.startsWith('req.body:')) {
+            const q = parseMaybeRegex(term.slice(9)); return matches(reqBody, q);
+        }
+        if (term.startsWith('resp.body:')) {
+            const q = parseMaybeRegex(term.slice(10)); return matches(respBody, q);
+        }
+        if (term.startsWith('header:')) {
+            const { nameQ, valueQ } = parseHeaderSpec(term.slice(7));
+            return matchHeaderTerm(reqHdrPairs, nameQ, valueQ) || matchHeaderTerm(respHdrPairs, nameQ, valueQ);
+        }
+        if (term.startsWith('req.header:')) {
+            const { nameQ, valueQ } = parseHeaderSpec(term.slice(11));
+            return matchHeaderTerm(reqHdrPairs, nameQ, valueQ);
+        }
+        if (term.startsWith('resp.header:')) {
+            const { nameQ, valueQ } = parseHeaderSpec(term.slice(12));
+            return matchHeaderTerm(respHdrPairs, nameQ, valueQ);
+        }
+
+        // default term: search everywhere
+        const q = parseMaybeRegex(term);
+        if (matches(url, q) || matches(method, q) || matches(statusS, q) || matches(host, q)) return true;
+        if (matches(reqBody, q) || matches(respBody, q)) return true;
+        if (matchHeaderTerm(reqHdrPairs, q, null)) return true;
+        if (matchHeaderTerm(reqHdrPairs, null, q)) return true;
+        if (matchHeaderTerm(respHdrPairs, q, null)) return true;
+        if (matchHeaderTerm(respHdrPairs, null, q)) return true;
+
+        return false;
+    });
+}
+
+// === Color Rules Manager (rich modal) =======================================
+async function openColorRulesManager() {
+    const root   = document.getElementById('colorRulesModal');
+    const dialog = root.querySelector('.modal-dialog');
+    const table  = document.getElementById('crmTable').querySelector('tbody');
+    const form   = document.getElementById('crmForm');
+    const qEl    = document.getElementById('crmQuery');
+    const cEl    = document.getElementById('crmColor');
+    const nEl    = document.getElementById('crmNote');
+    const eEl    = document.getElementById('crmEnabled');
+    const addBtn = document.getElementById('crmAdd');
+    const saveBtn= document.getElementById('crmSave');
+    const clrBtn = document.getElementById('crmClear');
+    const status = document.getElementById('crmStatus');
+
+    if (!root) { console.error('ColorRules modal HTML missing'); return; }
+
+    let rules = loadColorRules();
+    let selIdx = -1; // selected row index; -1 = none
+
+    function setStatus(msg) {
+        status.textContent = msg || '';
+        if (msg) setTimeout(() => { if (status.textContent === msg) status.textContent = ''; }, 1500);
+    }
+
+    function clearEditor() {
+        form.reset();
+        qEl.value = ''; cEl.value = ''; nEl.value = ''; eEl.checked = true;
+        saveBtn.disabled = true;
+        selIdx = -1;
+        highlightRow();
+    }
+
+    function readEditor() {
+        return {
+            query: (qEl.value || '').trim(),
+            color: (cEl.value || '').trim(),
+            note:  (nEl.value || '').trim(),
+            enabled: !!eEl.checked
+        };
+    }
+
+    function writeEditor(rule) {
+        qEl.value = rule.query || '';
+        cEl.value = rule.color || '';
+        nEl.value = rule.note  || '';
+        eEl.checked = !!rule.enabled;
+    }
+
+    function highlightRow() {
+        const rows = table.querySelectorAll('tr');
+        rows.forEach((tr, i) => tr.classList.toggle('selected', i === selIdx));
+    }
+
+    function renderTable() {
+        table.innerHTML = '';
+        rules.forEach((r, i) => {
+            const tr = document.createElement('tr');
+
+            const tdState = document.createElement('td');
+            tdState.className = 'state';
+            tdState.textContent = r.enabled ? '✅' : '⛔';
+
+            const tdColor = document.createElement('td');
+            const dot = document.createElement('span');
+            dot.className = 'swatch-dot';
+            dot.style.background = r.color || 'transparent';
+            tdColor.appendChild(dot);
+
+            const tdQuery = document.createElement('td');
+            tdQuery.textContent = r.query || '';
+
+            const tdNote = document.createElement('td');
+            tdNote.textContent = r.note || '';
+
+            const tdAct = document.createElement('td');
+            tdAct.className = 'row-actions';
+            const btnEdit = document.createElement('button');
+            btnEdit.className = 'btn btn-muted'; btnEdit.textContent = 'Edit';
+            const btnToggle = document.createElement('button');
+            btnToggle.className = 'btn btn-muted'; btnToggle.textContent = r.enabled ? 'Disable' : 'Enable';
+            const btnDel = document.createElement('button');
+            btnDel.className = 'btn'; btnDel.textContent = 'Delete';
+
+            btnEdit.onclick = () => { selIdx = i; writeEditor(rules[i]); saveBtn.disabled = false; highlightRow(); };
+            btnToggle.onclick = () => {
+                rules[i].enabled = !rules[i].enabled;
+                saveColorRules(rules); renderTable(); setStatus('Toggled');
+                syncUIAfterChange();
+            };
+            btnDel.onclick = () => {
+                rules.splice(i,1);
+                saveColorRules(rules); renderTable(); setStatus('Deleted');
+                // if deleted selected, clear editor
+                if (selIdx === i) clearEditor();
+                syncUIAfterChange();
+            };
+
+            tr.onclick = () => { selIdx = i; writeEditor(rules[i]); saveBtn.disabled = false; highlightRow(); };
+            tr.appendChild(tdState);
+            tr.appendChild(tdColor);
+            tr.appendChild(tdQuery);
+            tr.appendChild(tdNote);
+            tr.appendChild(tdAct);
+            table.appendChild(tr);
+        });
+        highlightRow();
+    }
+
+    function syncUIAfterChange() {
+        // Repaint list swatches
+        renderList();
+        // Refresh details panel if a capture is selected
+        if (selectedId) {
+            const cur = (captures || []).find(x => x.id === selectedId);
+            if (cur) renderDetails(cur);
+        }
+    }
+
+    // Wire editor actions
+    form.onsubmit = (e) => {
+        e.preventDefault();
+        const r = readEditor();
+        if (!r.query) { setStatus('Query is required'); qEl.focus(); return; }
+        rules.push({ id: String(Date.now()), ...r });
+        saveColorRules(rules);
+        renderTable();
+        clearEditor();
+        setStatus('Added');
+        syncUIAfterChange();
+    };
+
+    saveBtn.onclick = () => {
+        if (selIdx < 0 || selIdx >= rules.length) return;
+        const r = readEditor();
+        if (!r.query) { setStatus('Query is required'); qEl.focus(); return; }
+        rules[selIdx] = { ...rules[selIdx], ...r };
+        saveColorRules(rules);
+        renderTable();
+        saveBtn.disabled = true;
+        setStatus('Saved');
+        syncUIAfterChange();
+    };
+
+    clrBtn.onclick = clearEditor;
+
+    // Keyboard shortcuts
+    root.onkeydown = (e) => {
+        if (e.key === 'Escape') { close(); }
+        else if (e.key.toLowerCase() === 'a') { e.preventDefault(); clearEditor(); qEl.focus(); }     // Add
+        else if (e.key.toLowerCase() === 'e') {                                                       // Edit
+            if (selIdx >= 0) { writeEditor(rules[selIdx]); saveBtn.disabled = false; qEl.focus(); }
+        }
+        else if (e.key.toLowerCase() === 't') {                                                       // Toggle
+            if (selIdx >= 0) { rules[selIdx].enabled = !rules[selIdx].enabled; saveColorRules(rules); renderTable(); syncUIAfterChange(); }
+        }
+        else if (e.key === 'Delete') {                                                                // Delete
+            if (selIdx >= 0) { rules.splice(selIdx,1); saveColorRules(rules); renderTable(); clearEditor(); syncUIAfterChange(); }
+        }
+    };
+
+    // Open + focus mgmt
+    function open() {
+        root.setAttribute('aria-hidden', 'false');
+        renderTable();
+        clearEditor();
+        qEl.focus();
+    }
+    function close() {
+        root.setAttribute('aria-hidden', 'true');
+        // detach simple click-to-close on backdrop/x
+        root.removeEventListener('click', clickClose);
+    }
+    function clickClose(e){
+        const t = e.target;
+        if (t && t.dataset && t.dataset.close) close();
+    }
+
+    root.addEventListener('click', clickClose);
+    open();
+}
+
+function updateColorRuleNote(ruleId, newNote) {
+    const rules = loadColorRules();
+    const idx = rules.findIndex(r => r && r.id === ruleId);
+    if (idx < 0) return false;
+    rules[idx] = { ...rules[idx], note: String(newNote || '').trim() };
+    saveColorRules(rules);
+    return true;
+}
+
+// ---- Modal subsystem --------------------------------------------------------
+(function initModalSubsystem(){
+    const root   = document.getElementById('appModal');
+    if (!root) return; // modal HTML not present
+    const dialog = root.querySelector('.modal-dialog');
+    const label  = document.getElementById('appModalLabel');
+    const title  = document.getElementById('appModalTitle');
+    const input  = document.getElementById('appModalInput');
+    const okBtn  = document.getElementById('appModalOK');
+    const cxBtn  = document.getElementById('appModalCancel');
+
+    let resolveFn = null;
+    let previousActive = null;
+
+    function openModal({titleText, labelText, defaultValue, okText='OK', cancelText='Cancel'}) {
+        return new Promise((resolve) => {
+            resolveFn = resolve;
+            previousActive = document.activeElement;
+
+            title.textContent = titleText || 'Input';
+            label.textContent = labelText || '';
+            input.value = defaultValue ?? '';
+            okBtn.textContent = okText;
+            cxBtn.textContent = cancelText;
+
+            root.setAttribute('aria-hidden', 'false');
+
+            // Focus management
+            setTimeout(() => {
+                input.focus();
+                input.select && input.select();
+            }, 0);
+
+            // Trap focus inside dialog
+            function trap(e){
+                if (e.key !== 'Tab') return;
+                const focusables = dialog.querySelectorAll('button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])');
+                if (!focusables.length) return;
+                const first = focusables[0], last = focusables[focusables.length - 1];
+                if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+                else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+            }
+            root.addEventListener('keydown', trap);
+
+            // Key handlers
+            function keyHandler(e){
+                if (e.key === 'Escape') { e.preventDefault(); close(null); return; }
+                if (e.key === 'Enter')  { e.preventDefault(); close(input.value); return; }
+            }
+            root.addEventListener('keydown', keyHandler);
+
+            // Click handlers
+            root.addEventListener('click', clickClose);
+            okBtn.onclick = () => close(input.value);
+            cxBtn.onclick = () => close(null);
+
+            function clickClose(e){
+                const t = e.target;
+                if (t && t.dataset && t.dataset.close) { close(null); }
+            }
+
+            function close(result){
+                // cleanup listeners
+                root.removeEventListener('keydown', keyHandler);
+                root.removeEventListener('keydown', trap);
+                root.removeEventListener('click', clickClose);
+                okBtn.onclick = cxBtn.onclick = null;
+
+                root.setAttribute('aria-hidden', 'true');
+                resolveFn && resolveFn(result);
+                resolveFn = null;
+
+                // restore focus
+                previousActive && previousActive.focus && previousActive.focus();
+            }
+        });
+    }
+
+    // Expose a simple prompt-like function
+    window.showPromptModal = function(message, defaultValue=''){
+        return openModal({
+            titleText: 'Input',
+            labelText: message || '',
+            defaultValue
+        });
+    };
+
+    // Optional more specific UX variants
+    window.showRenameCaptureModal = function(currentName){
+        return openModal({
+            titleText: 'Rename Capture',
+            labelText: 'Enter a new name for this capture:',
+            defaultValue: currentName || '',
+            okText: 'Rename'
+        });
+    };
+
+})();
 
 // If you used <script defer>, either:
 //  - call init() here:

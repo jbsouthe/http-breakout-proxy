@@ -45,7 +45,8 @@
         </p>
         <ul>
             <li><b>Plain text</b> matches anywhere: URL, method, status, host, request/response headers, request/response bodies.</li>
-            <li><b>Prefixed terms</b> constrain scope (e.g., <code>method:</code>, <code>status:</code>, <code>host:</code>, <code>url:</code>, <code>body:</code>, <code>req.body:</code>, <code>resp.body:</code>, <code>header:</code>, <code>req.header:</code>, <code>resp.header:</code>).</li>
+            <li><b>Prefixed terms</b> constrain scope (e.g., <code>method:</code>, <code>status:</code>, <code>host:</code>, <code>url:</code>, <code>body:</code>, <code>req.body:</code>, <code>resp.body:</code>, <code>header:</code>, <code>req.header:</code>, <code>resp.header:</code>).
+                When prefix terms are specified, the URL, method, and host are exactly matched unless regex is used. This simplifies some common use cases.</li>
             <li><b>Regex</b> uses <code>/pattern/flags</code> (e.g., <code>/token/i</code>). Flags like <code>i</code>, <code>m</code>, <code>g</code> are supported.</li>
         </ul>
     </div>
