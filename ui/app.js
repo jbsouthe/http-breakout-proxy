@@ -1008,13 +1008,14 @@ function findMatchingRule(capture) {
         if (!r || !r.enabled) continue;
         const q = (r.query || '').trim();
         if (!q) continue;
-        if (captureMatchesQuery(capture, q)) return r;
+        if (captureMatchesQuery(capture, q, { ignoreRuleName: true })) return r;
     }
     return null;
 }
 // Decide if a capture matches a full query line (space-separated terms; AND semantics)
-function captureMatchesQuery(c, queryLine) {
+function captureMatchesQuery(c, queryLine, opts = {}) {
     const terms = (queryLine || '').trim().split(/\s+/).filter(Boolean);
+    const ignoreRuleName = !!opts.ignoreRuleName;
     if (!terms.length) return false;
 
     // Local shorthands (as in renderList)
@@ -1029,7 +1030,16 @@ function captureMatchesQuery(c, queryLine) {
     const reqHdrPairs  = headersToPairs(c.request_headers);
     const respHdrPairs = headersToPairs(c.response_headers);
 
+    let ruleName = '';
+    if (!ignoreRuleName) {
+        const r = findMatchingRule(c, queryLine); // ONLY when allowed
+        ruleName = (r && typeof r.name === 'string') ? r.name.toLowerCase() : '';
+    }
+
     return terms.every(term => {
+        if (term.startsWith('color:') && !ignoreRuleName) {
+            const q = parseMaybeRegex(term.slice(6)); return matches(ruleName, q, true)
+        }
         if (term.startsWith('method:')) {
             const q = parseMaybeRegex(term.slice(7)); return matches(method, q, true);
         }
@@ -1091,6 +1101,7 @@ async function openColorRulesManager() {
     const nEl    = document.getElementById('crmNote');
     const eEl    = document.getElementById('crmEnabled');
     const pEl    = document.getElementById('crmPriority');
+    const nameEl  = document.getElementById('crmName');
     const addBtn = document.getElementById('crmAdd');
     const saveBtn= document.getElementById('crmSave');
     const clrBtn = document.getElementById('crmClear');
@@ -1164,7 +1175,7 @@ async function openColorRulesManager() {
 
     function clearEditor() {
         form.reset();
-        qEl.value = ''; cEl.value = ''; nEl.value = ''; eEl.checked = true; pEl.value = 0;
+        qEl.value = ''; cEl.value = ''; nEl.value = ''; eEl.checked = true; pEl.value = 0; nameEl.value = '';
         saveBtn.disabled = true;
         selIdx = -1;
         colorDot.style.background = 'transparent';
@@ -1176,6 +1187,7 @@ async function openColorRulesManager() {
         const pr = parseInt((pEl && pEl.value) ? pEl.value : '0', 10);
         return {
             query:   (qEl.value || '').trim(),
+            name:    (nameEl.value || '').trim(),
             color:   (cEl.value || '').trim(),
             note:    (nEl.value || '').trim(),
             enabled: !!eEl.checked,
@@ -1185,6 +1197,7 @@ async function openColorRulesManager() {
 
     function writeEditor(rule) {
         qEl.value = rule.query || '';
+        nameEl.value = rule.name || '';
         cEl.value = rule.color || '';
         nEl.value = rule.note  || '';
         eEl.checked = !!rule.enabled;
@@ -1206,6 +1219,9 @@ async function openColorRulesManager() {
             const tdState = document.createElement('td');
             tdState.className = 'state';
             tdState.textContent = r.enabled ? '✅' : '⛔';
+
+            const tdName = document.createElement('td');
+            tdName.textContent = r.name;
 
             const tdPriority = document.createElement('td');
             tdPriority.textContent = Number.isFinite(r.priority) ? String(r.priority) : '0';
@@ -1288,6 +1304,7 @@ async function openColorRulesManager() {
             tr.appendChild(tdPriority);
             tr.appendChild(tdColor);
             tr.appendChild(tdQuery);
+            tr.appendChild(tdName);
             tr.appendChild(tdNote);
             tr.appendChild(tdAct);
             table.appendChild(tr);

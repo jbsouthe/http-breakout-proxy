@@ -45,8 +45,8 @@
         </p>
         <ul>
             <li><b>Plain text</b> matches anywhere: URL, method, status, host, request/response headers, request/response bodies.</li>
-            <li><b>Prefixed terms</b> constrain scope (e.g., <code>method:</code>, <code>status:</code>, <code>host:</code>, <code>url:</code>, <code>body:</code>, <code>req.body:</code>, <code>resp.body:</code>, <code>header:</code>, <code>req.header:</code>, <code>resp.header:</code>).
-                When prefix terms are specified, the URL, method, and host are exactly matched unless regex is used. This simplifies some common use cases.</li>
+            <li><b>Prefixed terms</b> constrain scope (e.g., <code>color:</code> <code>method:</code>, <code>status:</code>, <code>host:</code>, <code>url:</code>, <code>body:</code>, <code>req.body:</code>, <code>resp.body:</code>, <code>header:</code>, <code>req.header:</code>, <code>resp.header:</code>).
+                When prefix terms are specified, the URL, color, method, and host are exactly matched unless regex is used. This simplifies some common use cases.</li>
             <li><b>Regex</b> uses <code>/pattern/flags</code> (e.g., <code>/token/i</code>). Flags like <code>i</code>, <code>m</code>, <code>g</code> are supported.</li>
         </ul>
     </div>
@@ -60,6 +60,7 @@
             <tbody>
             <tr><td><code>login</code></td><td>Anywhere in URL, headers, or bodies</td></tr>
             <tr><td><code>/bearer\s+[A-Za-z0-9._-]+/i</code></td><td>Regex across all text fields</td></tr>
+            <tr><td><code>color:red</code></td><td>All captures matching the color rule named "red"</td></tr>
             <tr><td><code>status:4</code></td><td>Any 4xx response class</td></tr>
             <tr><td><code>status:404</code></td><td>Exact 404</td></tr>
             <tr><td><code>method:POST</code></td><td>HTTP POST only</td></tr>

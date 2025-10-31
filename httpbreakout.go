@@ -154,6 +154,7 @@ func normalizeAndSort(in []SearchItem, cap int) []SearchItem {
 
 type ColorRule struct {
 	ID       string `json:"id"`
+	Name     string `json:"name"`
 	Query    string `json:"query"`
 	Color    string `json:"color"`
 	Note     string `json:"note"`
@@ -407,6 +408,7 @@ func defaultColorRules() []ColorRule {
 	return []ColorRule{
 		{
 			ID:       "1",
+			Name:     "red",
 			Color:    "#e74c3c", // red
 			Query:    "status:5",
 			Priority: 100,
@@ -415,6 +417,7 @@ func defaultColorRules() []ColorRule {
 		},
 		{
 			ID:       "2",
+			Name:     "orange",
 			Color:    "#d77d28", // orange
 			Query:    "status:4",
 			Priority: 100,
@@ -423,6 +426,7 @@ func defaultColorRules() []ColorRule {
 		},
 		{
 			ID:       "3",
+			Name:     "blue",
 			Color:    "#3498db", // blue
 			Query:    "method:POST",
 			Priority: 0,
@@ -431,6 +435,7 @@ func defaultColorRules() []ColorRule {
 		},
 		{
 			ID:       "4",
+			Name:     "green",
 			Color:    "#2ecc71", // green
 			Query:    "method:GET",
 			Priority: 0,

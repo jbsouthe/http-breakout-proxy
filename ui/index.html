@@ -501,7 +501,7 @@
 
         <!-- Reuse existing IDs so JS stays the same -->
         <div id="filterBar" class="filter-bar">
-            <input id="filterInput" placeholder="Filter (free text, method:, status:, host:, url:, body:, header:, regex /…/i)" />
+            <input id="filterInput" placeholder="Filter (free text, color:, method:, status:, host:, url:, body:, header:, regex /…/i)" />
             <button id="saveSearchBtn" title="Save current filter">★</button>
             <button id="historyBtn" title="Search history">⏱</button>
             <div id="historyMenu" class="history-menu" aria-hidden="true"></div>
@@ -642,6 +642,16 @@
 
             <!-- Editor -->
             <form id="crmForm" class="crm-form" autocomplete="off" novalidate>
+                <div class="crm-row">
+                    <div class="crm-field">
+                        <label>Name</label>
+                        <input id="crmName" type="text" placeholder="Single word name for match filtering" />
+                    </div>
+                    <div class="crm-field">
+                        <label>Note</label>
+                        <input id="crmNote" type="text" placeholder="Short badge text for details" />
+                    </div>
+                </div>
                 <div class="crm-field">
                     <label>Query</label>
                     <input id="crmQuery" type="text" placeholder="e.g. status:5 or header:x-trace-id=/[A-F0-9-]+/i" />
@@ -654,10 +664,6 @@
                             <input id="crmColor" type="text" placeholder="#e91e63 or hsl(...)" />
                             <input id="crmColorWell" type="color" value="#000000" aria-label="Pick color" />
                         </div>
-                    </div>
-                    <div class="crm-field">
-                        <label>Note</label>
-                        <input id="crmNote" type="text" placeholder="Short badge text for details" />
                     </div>
                     <div class="crm-field">
                         <label>Enabled</label>
@@ -684,6 +690,7 @@
                         <th style="width:90px">Priority</th>
                         <th style="width:60px">Color</th>
                         <th>Query</th>
+                        <th>Name</th>
                         <th>Note</th>
                         <th style="width:160px">Actions</th>
                     </tr>
