@@ -27,9 +27,13 @@ export function buildPythonFromCapture(c) {
     L.push('headers = {', headerLines || '    # no headers', '}', '');
 
     if (!isTruncated && looksJson) {
-        const compact = JSON.stringify(parsed);
-        const formatted = compact.replace(/"(\w+)":/g,'$1:').replace(/: null/g,': None').replace(/: true/g,': True').replace(/: false/g,': False');
-        L.push(`payload = ${formatted}`,'',`response = requests.${method.toLowerCase()}(url, headers=headers, json=payload)`);
+        const pretty = JSON.stringify(parsed, null, 4)  // 4-space indentation for readability
+            .replace(/"(\w+)":/g, '$1:')
+            .replace(/: null/g, ': None')
+            .replace(/: true/g, ': True')
+            .replace(/: false/g, ': False');
+        L.push(`payload = ${pretty}`);
+        L.push('', `response = requests.${method.toLowerCase()}(url, headers=headers, json=payload)`);
     } else if (!isTruncated && rawBody) {
         L.push(`data = """${rawBody.replace(/"""/g,'\\"""')}"""`,'',`response = requests.${method.toLowerCase()}(url, headers=headers, data=data)`);
     } else {
