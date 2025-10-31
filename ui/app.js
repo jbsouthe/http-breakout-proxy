@@ -761,11 +761,71 @@ function shouldSkipHeader(name) {
         || n === 'upgrade';
 }
 
-function buildCurlFromCapture(c) {
-    const parts = ['curl', '-i', '-sS']; // show headers, fail loud
-    const method = (c.method || 'GET').toUpperCase();
+function isPrintableAscii(s) {
+    if (s == null) return true;
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        // allow tab(9), LF(10), CR(13), and visible ascii 32..126
+        if (!(c === 9 || c === 10 || c === 13 || (c >= 32 && c <= 126))) return false;
+    }
+    return true;
+}
 
-    if (method !== 'GET') parts.push('-X', shellQuote(method));
+function looksTruncated(s) {
+    return /\b--truncated--\b/i.test(String(s || ''));
+}
+
+function shellQuote(s) {
+    if (s == null) return "''";
+    const str = String(s);
+    if (str === '') return "''";
+    return `'${str.replace(/'/g, `'\\''`)}'`;
+}
+
+function shouldSkipHeader(name) {
+    const n = String(name).toLowerCase();
+    return n === 'host'
+        || n === 'content-length'
+        || n === 'accept-encoding'
+        || n === 'connection'
+        || n === 'proxy-connection'
+        || n === 'keep-alive'
+        || n === 'transfer-encoding'
+        || n === 'upgrade'
+        || n === 'content-encoding'; // <-- important for request replay
+}
+
+// Compact multiline pretty print
+function formatCurlParts(parts) {
+    const out = [];
+    let current = '';
+    for (let i = 0; i < parts.length; i++) {
+        const token = parts[i];
+        if (i === 0) { out.push(token); continue; }
+
+        // group short flags with their value on the same line
+        const prev = parts[i - 1];
+        if (prev === '-X' || prev === '-H' || prev.startsWith('--data')) {
+            current += ' ' + token;
+        } else if (token === '-H' || token.startsWith('--data') || token === '-X') {
+            if (current) out.push(current.trim());
+            current = token;
+        } else {
+            current += ' ' + token;
+        }
+    }
+    if (current) out.push(current.trim());
+
+    // Join grouped chunks with backslashes every few arguments
+    return out.map((s, i) => (i === 0 ? s : ' \\\n  ' + s)).join('');
+}
+
+function buildCurlFromCapture(c) {
+    const parts = ['curl', '-i', '-sS']; // headers + fail loudly to stderr
+    const method = (c.method || 'GET').toUpperCase();
+    const url = c.url || '';
+
+    if (method !== 'GET') { parts.push('-X', method); }
 
     // headers
     const hdrs = c.request_headers || {};
@@ -773,27 +833,39 @@ function buildCurlFromCapture(c) {
         if (shouldSkipHeader(k)) return;
         const values = Array.isArray(hdrs[k]) ? hdrs[k] : [hdrs[k]];
         values.forEach(v => {
-            parts.push('-H', shellQuote(`${k}: ${v}`));
+            // strip CR/LF that can break header lines
+            const clean = String(v).replace(/[\r\n]+/g, ' ');
+            parts.push('-H', shellQuote(`${k}: ${clean}`));
         });
     });
 
-    // body (only if present and method typically allows a body)
-    const body = c.request_body || '';
-    const hasBody = body.trim().length > 0 && !/^\s*--truncated--\s*$/i.test(body);
-    if (hasBody && !['GET','HEAD'].includes(method)) {
-        // Use --data-binary to preserve bytes; server-side capture is text so this is best-effort
-        parts.push('--data-binary', shellQuote(body));
+    // body
+    let body = c.request_body || '';
+    const hasBody = body && !looksTruncated(body) && !['GET','HEAD'].includes(method);
+
+    if (hasBody) {
+        // Prefer the *raw* captured text; if it looks like JSON, keep it as-is
+        const printable = isPrintableAscii(body);
+        const seemsJSON = /^\s*[\[{]/.test(body) || (c.request_headers && ((c.request_headers['Content-Type']||c.request_headers['content-type']||[])[0]||'').includes('application/json'));
+
+        if (printable && seemsJSON) {
+            // Send exactly as captured; do not pretty-print here
+            parts.push('--data-raw', shellQuote(body));
+        } else if (printable) {
+            // form/text bodies
+            parts.push('--data-binary', shellQuote(body));
+        } else {
+            // Non-printable / binary payload: use process substitution (bash/zsh)
+            // Encode as base64 on the fly to avoid shell mangling.
+            const b64 = btoa(body); // Browser base64 (assumes body came from UTF-8; if not, you may need a true bytes source)
+            parts.push('--data-binary', '@<(printf %s ' + shellQuote(b64) + ' | base64 -d)');
+        }
     }
 
-    // URL last
-    parts.push(shellQuote(c.url || ''));
+    parts.push(shellQuote(url));
 
-    // pretty multiline render
-    let out = '';
-    for (let i = 0; i < parts.length; i++) {
-        out += (i === 0 ? '' : ' \\\n  ') + parts[i];
-    }
-    return out;
+    // pretty multiline
+    return formatCurlParts(parts);
 }
 
 function buildPythonFromCapture(c) {
