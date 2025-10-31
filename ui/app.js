@@ -1273,11 +1273,26 @@ async function openColorRulesManager() {
 }
 
 function updateColorRuleNote(ruleId, newNote) {
-    const rules = loadColorRules();
+    // 1) Read from the synchronous cache (never a Promise)
+    const rules = getColorRulesSync();
+    if (!Array.isArray(rules) || rules.length === 0) return false;
+
+    // 2) Locate target rule
     const idx = rules.findIndex(r => r && r.id === ruleId);
     if (idx < 0) return false;
-    rules[idx] = { ...rules[idx], note: String(newNote || '').trim() };
-    saveColorRules(rules);
+
+    // 3) Update note (immutable write)
+    const next = rules.slice();
+    next[idx] = { ...next[idx], note: String(newNote || '').trim() };
+
+    // 4) Persist asynchronously; do not block UI
+    saveColorRules(next).catch(err => {
+        console.error('[UI] saveColorRules(note) failed:', err);
+    });
+
+    // 5) Optimistically update in-memory cache for immediate UI coherence
+    setColorRules(next);
+
     return true;
 }
 
