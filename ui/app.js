@@ -909,10 +909,13 @@ function buildPythonFromCapture(c) {
     lines.push('');
 
     if (!isTruncated && looksJson) {
-        // Inline formatted Python dict instead of json.loads
-        const formatted = JSON.stringify(parsedJson, null, 4)
-            .replace(/"(\w+)":/g, '$1:')         // drop quotes around simple keys
-            .replace(/: null/g, ': None')        // translate JSON null
+        // choose compact vs. pretty
+        const pretty = JSON.stringify(parsedJson, null, 4);
+        const compact = JSON.stringify(parsedJson);
+        const usePretty = pretty.length <= 600; // threshold: short → pretty, large → compact
+        const formatted = (usePretty ? pretty : compact)
+            .replace(/"(\w+)":/g, '$1:')
+            .replace(/: null/g, ': None')
             .replace(/: true/g, ': True')
             .replace(/: false/g, ': False');
         lines.push(`payload = ${formatted}`);
