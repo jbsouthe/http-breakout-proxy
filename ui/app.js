@@ -504,6 +504,9 @@ async function renderDetails(c) {
         };
     })(c);
 
+    // Draw the new gantt chart of the timings, yo
+    renderTimingGanttForCapture(c);
+
     // Force scroll-to-top of the details panel
     const detailsPanel = document.querySelector('.details');
     if (detailsPanel) detailsPanel.scrollTo({ top: 0, behavior: 'instant' });
@@ -1678,6 +1681,128 @@ async function bindSearchHistoryUI() {
         if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); openMenu(); }
         if (e.key === 'Escape') closeMenu();
     });
+}
+
+// Phase color map
+const PHASE_COLORS = {
+    dns:   '#9e9e9e', // gray
+    tcp:   '#f4a261', // orange
+    tls:   '#2a9d8f', // teal
+    ttfb:  '#e9c46a', // sand
+    resp:  '#4caf50', // green
+};
+
+function fmtMs(v) { return (v || 0) + ' ms'; }
+
+/**
+ * Render a single-request timing Gantt into #timingGantt using SVG.
+ * Expected fields on capture: dns_ms, connect_ms, tls_ms, ttfb_ms, resp_read_ms, total_ms|duration_ms
+ */
+function renderTimingGanttForCapture(capture) {
+    const hostEl = document.getElementById('timingGantt');
+    const legendEl = document.getElementById('timingLegend');
+    const statsEl = document.getElementById('timingStats');
+    if (!hostEl || !legendEl || !statsEl) return;
+
+    // Extract phase durations (ms)
+    const dns   = Number(capture.dns_ms || 0);
+    const tcp   = Number(capture.connect_ms || 0);
+    const tls   = Number(capture.tls_ms || 0);
+    const ttfb  = Number(capture.ttfb_ms || 0);
+    const resp  = Number(capture.resp_read_ms || 0);
+
+    // Prefer total_ms if provided; fallback to duration_ms
+    let total = Number(capture.total_ms || 0);
+    if (!total) total = Number(capture.duration_ms || 0);
+
+    // If total is unknown, approximate from parts
+    const sumParts = dns + tcp + tls + ttfb + resp;
+    if (!total) total = sumParts || 1;
+    const roundedTotal = Math.ceil(total / 1000) * 1000;
+
+    // Build stacked phases & offsets (left→right)
+    const phases = [
+        { key: 'dns',  label: 'DNS',      ms: dns,  color: PHASE_COLORS.dns },
+        { key: 'tcp',  label: 'TCP',      ms: tcp,  color: PHASE_COLORS.tcp },
+        { key: 'tls',  label: 'TLS',      ms: tls,  color: PHASE_COLORS.tls },
+        { key: 'ttfb', label: 'TTFB',     ms: ttfb, color: PHASE_COLORS.ttfb },
+        { key: 'resp', label: 'Response', ms: resp, color: PHASE_COLORS.resp },
+    ];
+
+    // Legend
+    legendEl.innerHTML = phases
+        .filter(p => p.ms > 0)
+        .map(p => `<span class="legend-item"><span class="legend-swatch" style="background:${p.color}"></span>${p.label} (${fmtMs(p.ms)})</span>`)
+        .join('') || '<span class="small muted">No phase timing available.</span>';
+
+    // SVG viewport
+    const W = hostEl.clientWidth || 600;
+    const H = hostEl.clientHeight || 120;
+    const PADDING = 18;        // left/right padding
+    const BAR_Y = 40;          // vertical position of the bar
+    const BAR_H = 24;          // bar height
+
+    // Scale factor: pixels per ms
+    const scale = (W - PADDING * 2) / (roundedTotal || 1);
+
+    // Grid marks (optional: every 20% of total)
+    const gridLines = [];
+    const ticks = Math.min(roundedTotal / 1000, 10); // at most 10 ticks
+    for (let i = 0; i <= ticks; i++) {
+        const ms = (i / ticks) * roundedTotal;
+        const x = PADDING + (ms / roundedTotal) * (W - PADDING * 2);
+        gridLines.push({ x, label: ms + ' ms' });
+    }
+
+    // Compute rectangles with cumulative offsets
+    let offset = 0;
+    const rects = [];
+    for (const p of phases) {
+        if (p.ms <= 0) continue;
+        const x = PADDING + offset * scale;
+        const w = Math.max(1, p.ms * scale);
+        rects.push({ x, y: BAR_Y, w, h: BAR_H, color: p.color, title: `${p.label}: ${p.ms} ms` });
+        offset += p.ms;
+    }
+
+    // Compose SVG
+    const svgParts = [];
+    svgParts.push(`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Request timing">`);
+
+    // Background
+    svgParts.push(`<rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>`);
+
+    // Grid lines + labels
+    gridLines.forEach((g, i) => {
+        const isZero = (i === 0);
+        svgParts.push(`<line x1="${g.x}" y1="20" x2="${g.x}" y2="${H-10}" stroke="${isZero ? '#bbb' : '#ddd'}" stroke-width="${isZero ? 1.2 : 1}" />`);
+        svgParts.push(`<text x="${g.x + 4}" y="18" font-size="11" fill="var(--muted)">${g.label}</text>`);
+    });
+
+    // Bars
+    rects.forEach(r => {
+        svgParts.push(`<rect class="bar" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="6" ry="6" fill="${r.color}">
+      <title>${r.title}</title>
+    </rect>`);
+    });
+
+    // Baseline total bracket (optional)
+    svgParts.push(`<rect x="${PADDING}" y="${BAR_Y + BAR_H + 10}" width="${Math.max(1, total * scale)}" height="6" rx="3" ry="3" fill="#ccc">
+    <title>Total: ${total} ms</title>
+  </rect>`);
+    svgParts.push(`<text x="${PADDING}" y="${BAR_Y + BAR_H + 26}" font-size="11" fill="var(--muted)">Total: ${total} ms</text>`);
+    svgParts.push('</svg>');
+    hostEl.innerHTML = svgParts.join('');
+
+    // Stats line (concise textual summary)
+    const h2 = !!capture.h2;
+    const reused = !!capture.reused_conn;
+    const addr = capture.server_addr || '';
+    statsEl.textContent =
+        `DNS ${dns} • TCP ${tcp} • TLS ${tls} • TTFB ${ttfb} • RESP ${resp} • TOTAL ${total} ms` +
+        (addr ? `  •  ${addr}` : '') +
+        (h2 ? '  •  h2' : '') +
+        (reused ? '  •  reused' : '');
 }
 
 // If you used <script defer>, either:

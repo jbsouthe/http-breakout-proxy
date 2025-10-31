@@ -452,6 +452,39 @@
         .pin.pinned { opacity:1 }
         .trash { cursor:pointer; opacity:.7 }
 
+        .timing-gantt {
+            width: 100%;
+            height: 120px;       /* adjust as desired */
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--panel);
+            overflow: hidden;
+        }
+
+        .timing-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 8px;
+            align-items: center;
+        }
+        .legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+        }
+        .legend-swatch {
+            width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--border);
+        }
+
+        .timing-stats {
+            margin-top: 6px;
+        }
+
+        /* Optional: tooltip for bars */
+        .bar:hover { opacity: 0.8; }
+
         /* responsive */
         @media (max-width:900px){
             #app{grid-template-columns:1fr; grid-auto-rows: auto; padding:10px}
@@ -530,6 +563,13 @@
                     <div class="k">Status</div><div id="ov-status" style="color: #ffffff">-</div>
                     <div class="k">Duration</div><div id="ov-duration">-</div>
                     <div class="k">Time</div><div id="ov-time">-</div>
+                </div>
+
+                <div id="timingCard" class="card">
+                    <div class="card-title">Connection Timing</div>
+                    <div id="timingLegend" class="timing-legend"></div>
+                    <div id="timingGantt" class="timing-gantt" role="img" aria-label="Request timing chart"></div>
+                    <div id="timingStats" class="timing-stats small muted"></div>
                 </div>
 
                 <div class="headers">

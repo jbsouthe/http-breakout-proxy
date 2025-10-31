@@ -21,6 +21,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -198,6 +199,88 @@ type Capture struct {
 	DurationMs         int64               `json:"duration_ms"`
 	Notes              string              `json:"notes,omitempty"`
 	Deleted            bool                `json:"deleted,omitempty"`
+
+	// Phase timings (milliseconds)
+	DNSMs      int64 `json:"dns_ms,omitempty"`
+	ConnectMs  int64 `json:"connect_ms,omitempty"`
+	TLSMs      int64 `json:"tls_ms,omitempty"`
+	SendMs     int64 `json:"send_ms,omitempty"`      // write request body (client -> origin)
+	TTFBMs     int64 `json:"ttfb_ms,omitempty"`      // first byte from origin after write
+	RespReadMs int64 `json:"resp_read_ms,omitempty"` // body read duration (first->last byte)
+	TotalMs    int64 `json:"total_ms,omitempty"`     // wall clock: RoundTrip start -> last byte
+
+	// Connection / protocol
+	ServerAddr string `json:"server_addr,omitempty"` // ip:port of origin
+	ReusedConn bool   `json:"reused_conn,omitempty"`
+	HTTP2      bool   `json:"h2,omitempty"` // negotiated h2
+}
+
+type phases struct {
+	startRT          time.Time // RoundTrip start
+	dnsStart, dnsEnd time.Time
+	conStart, conEnd time.Time
+	tlsStart, tlsEnd time.Time
+	wroteReq         time.Time
+	firstByte        time.Time
+	done             time.Time
+
+	serverAddr string
+	reused     bool
+	h2         bool
+}
+
+// req pointer -> phases
+var phaseMap sync.Map // map[string]*phases
+
+func millis(a, b time.Time) int64 {
+	if a.IsZero() || b.IsZero() {
+		return 0
+	}
+	return b.Sub(a).Milliseconds()
+}
+
+type tracingRT struct{ base http.RoundTripper }
+
+func (t tracingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	p := &phases{startRT: time.Now()}
+	key := reqKey(req)
+	phaseMap.Store(key, p)
+
+	ct := &httptrace.ClientTrace{
+		DNSStart: func(httptrace.DNSStartInfo) { p.dnsStart = time.Now() },
+		DNSDone:  func(httptrace.DNSDoneInfo) { p.dnsEnd = time.Now() },
+
+		ConnectStart: func(_, _ string) { p.conStart = time.Now() },
+		ConnectDone:  func(_, _ string, _ error) { p.conEnd = time.Now() },
+
+		TLSHandshakeStart: func() { p.tlsStart = time.Now() },
+		TLSHandshakeDone: func(cs tls.ConnectionState, _ error) {
+			p.tlsEnd = time.Now()
+			p.h2 = (cs.NegotiatedProtocol == "h2")
+		},
+
+		GotConn: func(ci httptrace.GotConnInfo) {
+			p.reused = ci.Reused
+			if ci.Conn != nil && ci.Conn.RemoteAddr() != nil {
+				p.serverAddr = ci.Conn.RemoteAddr().String()
+			}
+		},
+
+		WroteRequest: func(httptrace.WroteRequestInfo) { p.wroteReq = time.Now() },
+
+		GotFirstResponseByte: func() { p.firstByte = time.Now() },
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), ct))
+
+	// Delegate to base
+	resp, err := t.base.RoundTrip(req)
+
+	// Mark completion when the body is fully read by caller (OnResponse handler will set p.done)
+	// If an error happened before body is available, mark done now.
+	if err != nil {
+		p.done = time.Now()
+	}
+	return resp, err
 }
 
 type captureStore struct {
@@ -1116,6 +1199,12 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker, se
 func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker, caDur string) http.Handler {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
+	tr := &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		Proxy:             http.ProxyFromEnvironment,
+		ForceAttemptHTTP2: true,
+	}
+	proxy.Tr = tr
 
 	// Enable MITM if requested
 	if mitmEnabled {
@@ -1137,6 +1226,29 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 			return r, nil
 		}
 		start := time.Now()
+		p := &phases{startRT: start}
+		key := reqKey(r)
+		phaseMap.Store(key, p)
+
+		ct := &httptrace.ClientTrace{
+			DNSStart:          func(httptrace.DNSStartInfo) { p.dnsStart = time.Now() },
+			DNSDone:           func(httptrace.DNSDoneInfo) { p.dnsEnd = time.Now() },
+			ConnectStart:      func(_, _ string) { p.conStart = time.Now() },
+			ConnectDone:       func(_, _ string, _ error) { p.conEnd = time.Now() },
+			TLSHandshakeStart: func() { p.tlsStart = time.Now() },
+			TLSHandshakeDone: func(cs tls.ConnectionState, _ error) {
+				p.tlsEnd = time.Now()
+				p.h2 = (cs.NegotiatedProtocol == "h2")
+			},
+			GotConn: func(ci httptrace.GotConnInfo) {
+				p.reused = ci.Reused
+				if ci.Conn != nil && ci.Conn.RemoteAddr() != nil {
+					p.serverAddr = ci.Conn.RemoteAddr().String()
+				}
+			},
+			WroteRequest:         func(httptrace.WroteRequestInfo) { p.wroteReq = time.Now() },
+			GotFirstResponseByte: func() { p.firstByte = time.Now() },
+		}
 
 		reqHeaders := make(map[string][]string, len(r.Header))
 		for k, v := range r.Header {
@@ -1161,7 +1273,8 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 		}
 
 		ctx.UserData = start
-		reqMap.Store(reqKey(r), c)
+		reqMap.Store(key, c)
+		r = r.WithContext(httptrace.WithClientTrace(r.Context(), ct))
 		return r, nil
 	})
 
@@ -1176,6 +1289,29 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 			return resp
 		}
 		partial := val.(Capture)
+
+		if v, ok := phaseMap.Load(key); ok {
+			p := v.(*phases)
+			if p.done.IsZero() {
+				p.done = time.Now()
+			}
+
+			partial.DNSMs = millis(p.dnsStart, p.dnsEnd)
+			partial.ConnectMs = millis(p.conStart, p.conEnd)
+			partial.TLSMs = millis(p.tlsStart, p.tlsEnd)
+			partial.TTFBMs = millis(p.wroteReq, p.firstByte)
+			partial.RespReadMs = millis(p.firstByte, p.done)
+			partial.TotalMs = millis(p.startRT, p.done)
+			partial.ServerAddr = p.serverAddr
+			partial.ReusedConn = p.reused
+			if resp.Request != nil && resp.Request.TLS != nil {
+				partial.HTTP2 = (resp.Request.TLS.NegotiatedProtocol == "h2")
+			} else {
+				partial.HTTP2 = p.h2
+			}
+			phaseMap.Delete(key)
+		}
+
 		encoding := resp.Header.Get("Content-Encoding")
 		respBodyStr, newRespBody, err := readLimitedBody(resp.Body, maxStoredBody, strings.ToLower(encoding))
 		if err != nil {
@@ -1206,6 +1342,7 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 		stored := store.add(partial)
 		broker.publish(stored)
 		reqMap.Delete(key)
+
 		log.Printf("Response '%s' Status %s", resp.Request.URL.String(), resp.Status)
 		return resp
 	})
