@@ -1,8 +1,7 @@
 import { state, setSelectedId } from './state.js';
 import { fetchCapture, deleteCapture, renameCapture } from './api.js';
 import { findMatchingRule, updateColorRuleNote } from './rules.js';
-import { buildCurlFromCapture } from './curl.js';
-import { buildPythonFromCapture } from './python.js';
+import { buildCurlFromCapture, buildPythonFromCapture } from './exports.js';
 import { renderTimingGanttForCapture } from './timings.js';
 import { renderList, updateRowSelectionHighlight } from './list.js';
 
