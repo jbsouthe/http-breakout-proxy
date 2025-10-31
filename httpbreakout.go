@@ -50,8 +50,105 @@ func setVerbose(b bool) { verbose.Store(b) }
 func isVerbose() bool   { return verbose.Load() }
 
 type PersistedData struct {
-	Captures   []Capture   `json:"captures"`
-	ColorRules []ColorRule `json:"color_rules,omitempty"`
+	Captures    []Capture    `json:"captures"`
+	ColorRules  []ColorRule  `json:"color_rules,omitempty"`
+	SearchItems []SearchItem `json:"search_history,omitempty"`
+}
+
+type SearchItem struct {
+	ID        string    `json:"id"`
+	Query     string    `json:"query"` // the raw filter string
+	Label     string    `json:"label,omitempty"`
+	Pinned    bool      `json:"pinned,omitempty"`
+	Count     int       `json:"count,omitempty"`
+	LastUsed  time.Time `json:"last_used"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type searchStore struct {
+	sync.RWMutex
+	items []SearchItem // MRU: pinned first (stable), then recency descending
+	cap   int
+}
+
+func newSearchStore(cap int) *searchStore { return &searchStore{cap: cap} }
+func (s *searchStore) getAll() []SearchItem {
+	s.RLock()
+	defer s.RUnlock()
+	out := make([]SearchItem, len(s.items))
+	copy(out, s.items)
+	return out
+}
+func (s *searchStore) replace(all []SearchItem) {
+	s.Lock()
+	defer s.Unlock()
+	s.items = normalizeAndSort(all, s.cap)
+}
+func (s *searchStore) upsertRaw(q string, label string, pin bool) SearchItem {
+	now := time.Now().UTC()
+	s.Lock()
+	defer s.Unlock()
+
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return SearchItem{}
+	}
+
+	// de-dupe by exact query
+	idx := -1
+	for i := range s.items {
+		if s.items[i].Query == q {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 {
+		it := s.items[idx]
+		it.LastUsed = now
+		it.Count++
+		if label != "" {
+			it.Label = label
+		}
+		if pin {
+			it.Pinned = true
+		}
+		// move to front of its section (pinned or unpinned)
+		s.items = append(append(s.items[:idx], s.items[idx+1:]...), it)
+	} else {
+		it := SearchItem{
+			ID:        fmt.Sprintf("s-%d", now.UnixNano()),
+			Query:     q,
+			Label:     label,
+			Pinned:    pin,
+			Count:     1,
+			LastUsed:  now,
+			CreatedAt: now,
+		}
+		s.items = append([]SearchItem{it}, s.items...)
+	}
+	s.items = normalizeAndSort(s.items, s.cap)
+	return s.items[0]
+}
+func normalizeAndSort(in []SearchItem, cap int) []SearchItem {
+	// stable: pinned first (recency within pinned), then unpinned by recency
+	pinned, rest := make([]SearchItem, 0, len(in)), make([]SearchItem, 0, len(in))
+	for _, it := range in {
+		if it.Query == "" {
+			continue
+		}
+		if it.Pinned {
+			pinned = append(pinned, it)
+		} else {
+			rest = append(rest, it)
+		}
+	}
+	sort.SliceStable(pinned, func(i, j int) bool { return pinned[i].LastUsed.After(pinned[j].LastUsed) })
+	sort.SliceStable(rest, func(i, j int) bool { return rest[i].LastUsed.After(rest[j].LastUsed) })
+	out := append(pinned, rest...)
+	if cap > 0 && len(out) > cap {
+		out = out[:cap]
+	}
+	return out
 }
 
 type ColorRule struct {
@@ -642,6 +739,7 @@ func main() {
 	store := newCaptureStore(*bufferSize)
 	rules := &ruleStore{}
 	broker := newSseBroker()
+	searches := newSearchStore(100)
 
 	// Persistence
 	persistPath := *persist
@@ -692,7 +790,7 @@ func main() {
 	}
 
 	// Build handlers. Pass relevant flags through where required:
-	uiHandler := buildUIHandler(store, rules, broker)
+	uiHandler := buildUIHandler(store, rules, broker, searches)
 	// Pass caDir and maxBody if enableMITM or proxy code needs them.
 	proxyHandler := buildProxyHandler(*mitm, store, broker, *caDir)
 
@@ -712,7 +810,7 @@ func main() {
 }
 
 // buildUIHandler returns the mux for UI, REST, SSE, and static files.
-func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) http.Handler {
+func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker, searches *searchStore) http.Handler {
 	mux := http.NewServeMux()
 
 	// /api/captures  (list + clear)
@@ -936,6 +1034,67 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker) ht
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"paused": paused.Load(), "was": was})
 			return
+
+			// GET /api/searches -> []SearchItem
+			mux.HandleFunc("/api/searches", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "method", http.StatusMethodNotAllowed)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(searches.getAll())
+			})
+
+			// POST /api/searches {query,label?,pinned?} -> SearchItem (upsert MRU)
+			mux.HandleFunc("/api/searches", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					http.Error(w, "method", http.StatusMethodNotAllowed)
+					return
+				}
+				var in struct {
+					Query, Label string
+					Pinned       bool
+				}
+				if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+					http.Error(w, "bad json", 400)
+					return
+				}
+				it := searches.upsertRaw(in.Query, in.Label, in.Pinned)
+				_ = json.NewEncoder(w).Encode(it)
+			})
+
+			// PUT /api/searches  (replace whole list)
+			mux.HandleFunc("/api/searches", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPut {
+					http.Error(w, "method", http.StatusMethodNotAllowed)
+					return
+				}
+				var arr []SearchItem
+				if err := json.NewDecoder(r.Body).Decode(&arr); err != nil {
+					http.Error(w, "bad json", 400)
+					return
+				}
+				searches.replace(arr)
+				_ = json.NewEncoder(w).Encode(map[string]any{"updated": len(arr)})
+			})
+
+			// DELETE /api/searches/:id
+			mux.HandleFunc("/api/searches/", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete {
+					http.Error(w, "method", http.StatusMethodNotAllowed)
+					return
+				}
+				id := strings.TrimPrefix(r.URL.Path, "/api/searches/")
+				items := searches.getAll()
+				out := make([]SearchItem, 0, len(items))
+				for _, it := range items {
+					if it.ID != id {
+						out = append(out, it)
+					}
+				}
+				searches.replace(out)
+				w.WriteHeader(http.StatusNoContent)
+			})
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

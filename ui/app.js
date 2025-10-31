@@ -1,11 +1,14 @@
 let captures = [];   // newest-first
 let selectedId = null;
 let filterText = '';
+const SH_KEY = 'searchHistory.v1';
+let SEARCH_HISTORY = []; // array of {id,query,label?,pinned?,count,last_used,created_at}
 
 
 
 function init() {
     bindUI();
+    bindSearchHistoryUI();
     loadInitial();
     startSSE();
     setupTabs();
@@ -79,6 +82,7 @@ async function loadInitial() {
         const data = await r.json(); // { captures: [], color_rules: [] }
         captures = (data.captures || []).reverse();
         await refreshRulesFromServer();
+        await initSearchHistory();
         console.debug('[CRM] rules type at open:', Object.prototype.toString.call(COLOR_RULES));
         renderList();
         if (captures.length) selectCapture(captures[0].id);
@@ -1375,6 +1379,180 @@ function updateColorRuleNote(ruleId, newNote) {
     };
 
 })();
+
+async function fetchSearches() {
+    try {
+        const r = await fetch('/api/searches');
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        return await r.json();
+    } catch (e) {
+        // fallback to localStorage
+        try { return JSON.parse(localStorage.getItem(SH_KEY) || '[]'); }
+        catch { return []; }
+    }
+}
+
+async function putSearches(arr) {
+    // server preferred
+    try {
+        const r = await fetch('/api/searches', {
+            method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(arr || [])
+        });
+        if (!r.ok) throw new Error('HTTP '+r.status);
+    } catch {
+        localStorage.setItem(SH_KEY, JSON.stringify(arr || []));
+    }
+}
+
+async function postSearch(query, label, pinned) {
+    try {
+        const r = await fetch('/api/searches', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ query, label: label||'', pinned: !!pinned })
+        });
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        return await r.json(); // single item
+    } catch {
+        // local fallback: naive MRU
+        const now = new Date().toISOString();
+        const idx = SEARCH_HISTORY.findIndex(s => s.query === query);
+        if (idx >= 0) {
+            const it = SEARCH_HISTORY[idx];
+            it.last_used = now; it.count = (it.count||0)+1; if (label) it.label = label; if (pinned) it.pinned = true;
+            SEARCH_HISTORY.splice(idx,1);
+            SEARCH_HISTORY.unshift(it);
+            localStorage.setItem(SH_KEY, JSON.stringify(SEARCH_HISTORY));
+            return it;
+        }
+        const it = { id: 'ls-'+Date.now(), query, label: label||'', pinned: !!pinned, count:1, last_used: now, created_at: now };
+        SEARCH_HISTORY.unshift(it);
+        localStorage.setItem(SH_KEY, JSON.stringify(SEARCH_HISTORY));
+        return it;
+    }
+}
+
+async function initSearchHistory() {
+    SEARCH_HISTORY = await fetchSearches();
+}
+
+function setSearchHistory(arr) {
+    SEARCH_HISTORY = Array.isArray(arr) ? arr.slice() : [];
+}
+
+function getSearchHistory() {
+    return Array.isArray(SEARCH_HISTORY) ? SEARCH_HISTORY.slice() : [];
+}
+
+async function bindSearchHistoryUI() {
+    const input = document.getElementById('filterInput');
+    const saveBtn = document.getElementById('saveSearchBtn');
+    const btn = document.getElementById('historyBtn');
+    const menu = document.getElementById('historyMenu');
+
+    function closeMenu(){ menu.style.display='none'; menu.setAttribute('aria-hidden','true'); }
+    function openMenu(){
+        renderHistoryMenu();
+        const rect = btn.getBoundingClientRect();
+        menu.style.left = rect.left+'px';
+        menu.style.top = (rect.bottom + window.scrollY)+'px';
+        menu.style.display='block';
+        menu.setAttribute('aria-hidden','false');
+    }
+
+    btn.addEventListener('click', ()=> {
+        const visible = menu.style.display === 'block';
+        if (visible) closeMenu(); else openMenu();
+    });
+    document.addEventListener('click', (e) => {
+        if (!menu.contains(e.target) && e.target !== btn) closeMenu();
+    });
+
+    saveBtn.addEventListener('click', async () => {
+        const q = (input.value || '').trim();
+        if (!q) return;
+        const label = prompt('Optional name for this filter:', '');
+        const item = await postSearch(q, label || '', /*pinned*/ false);
+        // refresh view
+        const arr = await fetchSearches();
+        setSearchHistory(arr);
+        renderHistoryMenu();
+    });
+
+    // Quick-save on Enter (MRU) without label
+    input.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter') {
+            const q = (input.value || '').trim();
+            if (!q) return;
+            await postSearch(q, '', false);
+            // no UI pop; silent MRU update
+        }
+    });
+
+    function renderHistoryMenu() {
+        const arr = getSearchHistory();
+        menu.innerHTML = '';
+        if (!arr.length) { menu.innerHTML = '<div class="small" style="padding:8px;color:var(--muted)">No history yet</div>'; return; }
+
+        arr.forEach((it) => {
+            const row = document.createElement('div');
+            row.className = 'history-item';
+            row.innerHTML = `
+        <span class="pin ${it.pinned ? 'pinned':''}" title="${it.pinned?'Unpin':'Pin'}">★</span>
+        <div class="history-query" title="${it.query}">${escapeHtml(it.label || it.query)}</div>
+        <div class="small" style="color:var(--muted)">${new Date(it.last_used).toLocaleString()}</div>
+        <span class="trash" title="Delete">🗑</span>
+      `;
+
+            // Apply this search on click
+            row.addEventListener('click', async (ev) => {
+                if (ev.target.closest('.pin') || ev.target.closest('.trash')) return;
+                input.value = it.query;
+                filterText = it.query.toLowerCase();
+                renderList();
+                closeMenu();
+                // bump MRU
+                await postSearch(it.query, it.label || '', it.pinned);
+            });
+
+            // Toggle pin
+            row.querySelector('.pin').addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                const arr = getSearchHistory();
+                const idx = arr.findIndex(s => s.id === it.id);
+                if (idx >= 0) {
+                    arr[idx].pinned = !arr[idx].pinned;
+                    await putSearches(arr);
+                    setSearchHistory(await fetchSearches());
+                    renderHistoryMenu();
+                }
+            });
+
+            // Delete
+            row.querySelector('.trash').addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                try {
+                    const r = await fetch('/api/searches/'+encodeURIComponent(it.id), { method:'DELETE' });
+                    if (!r.ok && r.status !== 204) throw new Error('HTTP '+r.status);
+                } catch {
+                    // fallback: local remove
+                    const arr = getSearchHistory().filter(s => s.id !== it.id);
+                    localStorage.setItem(SH_KEY, JSON.stringify(arr));
+                }
+                setSearchHistory(await fetchSearches());
+                renderHistoryMenu();
+            });
+
+            menu.appendChild(row);
+        });
+    }
+
+    // Optional: Cmd/Ctrl+K opens menu, Esc closes.
+    window.addEventListener('keydown', (e) => {
+        const mod = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey;
+        if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); openMenu(); }
+        if (e.key === 'Escape') closeMenu();
+    });
+}
 
 // If you used <script defer>, either:
 //  - call init() here:

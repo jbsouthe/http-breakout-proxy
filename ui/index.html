@@ -435,6 +435,22 @@
         }
 
         .input-error { border-color: #b42318 !important; }
+        .filter-bar { display:flex; align-items:center; gap:8px; width: 100%; }
+        #filterInput { flex:1; min-width: 200px; }
+        .history-menu {
+            position:absolute; margin-top:4px; width: 520px; max-height: 50vh; overflow:auto;
+            background: var(--panel); border:1px solid var(--border); border-radius:10px; padding:8px; display:none;
+            box-shadow: 0 8px 20px rgba(0,0,0,.2); z-index: 20;
+        }
+        .history-item {
+            display:grid; grid-template-columns: auto 1fr auto auto; gap:10px; align-items:center;
+            padding:6px 8px; border-radius:8px; cursor:pointer;
+        }
+        .history-item:hover { background: var(--hover); }
+        .history-query { font-family: var(--mono); font-size: 13px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pin { cursor:pointer; opacity:.7 }
+        .pin.pinned { opacity:1 }
+        .trash { cursor:pointer; opacity:.7 }
 
         /* responsive */
         @media (max-width:900px){
@@ -451,7 +467,12 @@
         <div class="spacer"></div>
 
         <!-- Reuse existing IDs so JS stays the same -->
-        <input id="filterInput" placeholder="Filter (free text, method:, status:, host:, url:, body:, header:, regex /…/i)" />
+        <div id="filterBar" class="filter-bar">
+            <input id="filterInput" placeholder="Filter (free text, method:, status:, host:, url:, body:, header:, regex /…/i)" />
+            <button id="saveSearchBtn" title="Save current filter">★</button>
+            <button id="historyBtn" title="Search history">⏱</button>
+            <div id="historyMenu" class="history-menu" aria-hidden="true"></div>
+        </div>
         <button id="colorRulesBtn" title="Define color tagging rules">Color Rules</button>
         <button id="pauseBtn" class="but" title="Pause Capture">Pause</button>
         <button id="clearBtn" class="but but-danger" title="Clear all captures">Clear</button>
