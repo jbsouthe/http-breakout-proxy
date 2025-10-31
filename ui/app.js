@@ -871,30 +871,62 @@ function buildCurlFromCapture(c) {
 function buildPythonFromCapture(c) {
     const method = (c.method || 'GET').toUpperCase();
     const url = c.url || '';
-    const headers = c.request_headers || {};
-    const body = c.request_body || '';
+    const hdrs = c.request_headers || {};
 
-    // format headers
-    const headerLines = Object.keys(headers)
+    function shouldSkipHeader(name) {
+        const n = String(name).toLowerCase();
+        return [
+            'host', 'content-length', 'accept-encoding', 'connection',
+            'proxy-connection', 'keep-alive', 'transfer-encoding',
+            'upgrade', 'content-encoding'
+        ].includes(n);
+    }
+
+    const headerLines = Object.keys(hdrs)
         .filter(k => !shouldSkipHeader(k))
         .map(k => {
-            const v = Array.isArray(headers[k]) ? headers[k][0] : headers[k];
+            const v = Array.isArray(hdrs[k]) ? hdrs[k][0] : hdrs[k];
             return `    ${JSON.stringify(k)}: ${JSON.stringify(v)},`;
         })
         .join('\n');
+
+    const rawBody = c.request_body || '';
+    const isTruncated = /\b--truncated--\b/i.test(rawBody);
+    let looksJson = false;
+    let parsedJson = null;
+    try {
+        parsedJson = JSON.parse(rawBody);
+        looksJson = true;
+    } catch { /* not JSON */ }
 
     const lines = [];
     lines.push('import requests');
     lines.push('');
     lines.push(`url = ${JSON.stringify(url)}`);
-    if (headerLines) lines.push('headers = {\n' + headerLines + '\n}');
-    if (body.trim()) lines.push(`data = ${JSON.stringify(body)}`);
+    lines.push('headers = {');
+    lines.push(headerLines || '    # no headers');
+    lines.push('}');
     lines.push('');
-    let req = `response = requests.${method.toLowerCase()}(url`;
-    if (headerLines) req += ', headers=headers';
-    if (body.trim()) req += ', data=data';
-    req += ')';
-    lines.push(req);
+
+    if (!isTruncated && looksJson) {
+        // Inline formatted Python dict instead of json.loads
+        const formatted = JSON.stringify(parsedJson, null, 4)
+            .replace(/"(\w+)":/g, '$1:')         // drop quotes around simple keys
+            .replace(/: null/g, ': None')        // translate JSON null
+            .replace(/: true/g, ': True')
+            .replace(/: false/g, ': False');
+        lines.push(`payload = ${formatted}`);
+        lines.push('');
+        lines.push(`response = requests.${method.toLowerCase()}(url, headers=headers, json=payload)`);
+    } else if (!isTruncated && rawBody) {
+        lines.push(`data = """${rawBody.replace(/"""/g, '\\"""')}"""`);
+        lines.push('');
+        lines.push(`response = requests.${method.toLowerCase()}(url, headers=headers, data=data)`);
+    } else {
+        if (isTruncated) lines.push('# NOTE: truncated body not included');
+        lines.push(`response = requests.${method.toLowerCase()}(url, headers=headers)`);
+    }
+
     lines.push('');
     lines.push('print(response.status_code)');
     lines.push('print(response.text)');
