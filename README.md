@@ -1,26 +1,103 @@
 
-**HTTP Breakout Proxy** is a lightweight, cross-platform HTTP/HTTPS interception proxy implemented in Go with an embedded real-time web interface for capture inspection and manipulation. It is intended for diagnostic and development use: debugging API clients, inspecting integrations, and interactively replaying or exporting captured requests/responses.
 
-![Web App](doc_images/Main-page.png) 
+
+# HTTP Breakout Proxy
+
+A lightweight HTTP/HTTPS intercepting proxy and traffic analysis tool written in Go, with a web-based UI for inspecting, filtering, coloring, and annotating captured traffic in real time.
+
+![Web App](doc_images/Main-page.png)
 
 ![Color Rules](doc_images/color_modal.png)
 ---
 
-## Features
+## Overview
 
-- Single-binary distribution with embedded web UI (`ui/` embedded via `embed.FS`).
-- Full HTTP and HTTPS proxying; optional MITM interception with generated CA certificate.
-- Real-time UI with Server-Sent Events (SSE) for live updates.
-- Capture storage in an in-memory circular buffer, optional persistence to disk.
-- Request/response inspection with automatic decompression (gzip/deflate) for display.
-- Advanced filter language (plain text, keyed prefixes, and `/regex/flags`).
-- Capture management: rename, delete, clear, pause/resume capture collection.
-- Color tagging based on custom search rules
-- Export helpers: copy as `curl`, copy as Python `requests`, download raw response body.
-- Simple REST API for automation and integration.
+**HTTP Breakout Proxy** functions as both an HTTP and HTTPS MITM proxy and a live visualization tool.  
+It captures requests and responses between two software components, allowing developers to:
+
+- Inspect headers, bodies, and timing details for each request and response.
+- Organize, filter, and persist captured data.
+- Highlight requests based on user-defined **color rules**.
+- Pause or resume capture dynamically.
+- View request timing as a **Gantt chart** to visualize performance phases.
+
+The proxy embeds a full-featured UI accessible from any modern web browser, enabling immediate, real-time analysis without external tools.
 
 ---
 
+## Features
+
+### 🔍 Capture and Inspection
+- Intercepts both HTTP and HTTPS traffic (with MITM CA support).
+- Displays all request and response metadata, headers, and bodies.
+- Supports truncation for very large bodies.
+
+### 💾 Persistence
+- Captures and color rules are stored in `captures.json` (or specified file).
+- Automatically reloads state at startup and periodically saves to disk.
+- Default color rules are generated on first run if none exist.
+
+### 🖥️ Web UI
+- Responsive embedded web interface (served by the proxy itself).
+- Displays captures in a scrollable list with color-coded indicators.
+- Details panel shows:
+    - Request and response headers/bodies
+    - Timing breakdowns
+    - Editable notes
+    - Gantt-style performance chart for connection phases
+
+### 🎨 Color Rules
+- Define conditional color highlights for captures using flexible filter syntax:
+    - Example: `status:4 status:5` → highlights HTTP errors
+    - Example: `url:/api/` → highlights API requests
+    - Example: `/\.css$/` → regex match on URL
+- Each rule includes:
+    - Name, color, match expression, priority, and note
+- Highest-priority match wins.
+- Managed interactively through a modal UI with live previews.
+- Persisted across sessions.
+
+### ⏸️ Capture Control
+- **Pause/Resume** button allows you to stop collecting new captures without stopping the proxy.
+- Useful when focusing on a fixed dataset or isolating specific behavior.
+
+### 📈 Performance Visualization
+- Each capture includes detailed connection timing:
+    - DNS lookup
+    - TCP connect
+    - TLS handshake
+    - Server processing
+    - Response read
+- Displayed as a Gantt chart in the details panel.
+- Scale automatically rounds to the nearest second for readability.
+
+### 🧭 Filtering and Search
+- Real-time filter box supporting:
+    - Field-based filters (`method:GET`, `status:404`, `header:Content-Type=application/json`)
+    - Regex expressions (`/login/`)
+    - Combined terms with AND/OR semantics
+- Case-insensitive and partial matching supported.
+- Filter applies both to the capture list and color highlighting.
+- Search history stored locally in the browser.
+
+### 🧹 Management
+- Delete individual captures or clear all captures via UI.
+- Rules and notes are persisted along with captures.
+
+### 🧩 Export Utilities
+- Copy a capture as:
+    - `curl` command (formatted for terminal)
+    - `python requests` code snippet (clean JSON representation)
+- Download response bodies directly from the UI.
+
+---
+
+## Command Line Usage
+
+```bash
+httpbreakout  -l 127.0.0.1:8080
+````
+  
 ## Quick Start
 
 ### Build (from source)
