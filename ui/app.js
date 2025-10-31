@@ -1065,11 +1065,11 @@ async function openColorRulesManager() {
     function readEditor() {
         const pr = parseInt((pEl && pEl.value) ? pEl.value : '0', 10);
         return {
-            query: (qEl.value || '').trim(),
-            color: (cEl.value || '').trim(),
-            note:  (nEl.value || '').trim(),
-            priority: Number.isFinite(pr) ? pr : 0,
-            enabled: !!eEl.checked
+            query:   (qEl.value || '').trim(),
+            color:   (cEl.value || '').trim(),
+            note:    (nEl.value || '').trim(),
+            enabled: !!eEl.checked,
+            priority: Number.isFinite(pr) ? pr : 0
         };
     }
 
@@ -1219,17 +1219,21 @@ async function openColorRulesManager() {
 
     saveBtn.onclick = async () => {
         if (selIdx < 0 || selIdx >= rules.length) return;
+
         const r = readEditor();
-        if (!r.query) {
-            setStatus('Query is required');
-            qEl.focus();
-            return;
-        }
-        rules[selIdx] = { ...rules[selIdx], ...r };
+        if (!r.query) { setStatus('Query is required'); qEl.focus(); return; }
+
+        // Preserve the rule's ID
+        const id = rules[selIdx].id || String(Date.now());
+        rules[selIdx] = { ...rules[selIdx], ...r, id };
+
+        // Persist full set; DO NOT reassign "rules" from the PUT response
         await saveColorRules(rules);
-        // Re-fetch canonical, priority-sorted order from server
+
+        // Re-fetch canonical (priority-sorted) list from server
         await refreshRulesFromServer();
         rules = getColorRulesSync();
+
         renderTable();
         saveBtn.disabled = true;
         setStatus('Saved');
