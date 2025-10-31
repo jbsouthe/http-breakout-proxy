@@ -242,71 +242,79 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker, se
 			_ = json.NewEncoder(w).Encode(map[string]any{"paused": paused.Load(), "was": was})
 			return
 
-			// GET /api/searches -> []SearchItem
-			mux.HandleFunc("/api/searches", func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet {
-					http.Error(w, "method", http.StatusMethodNotAllowed)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(searches.getAll())
-			})
-
-			// POST /api/searches {query,label?,pinned?} -> SearchItem (upsert MRU)
-			mux.HandleFunc("/api/searches", func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					http.Error(w, "method", http.StatusMethodNotAllowed)
-					return
-				}
-				var in struct {
-					Query, Label string
-					Pinned       bool
-				}
-				if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-					http.Error(w, "bad json", 400)
-					return
-				}
-				it := searches.upsertRaw(in.Query, in.Label, in.Pinned)
-				_ = json.NewEncoder(w).Encode(it)
-			})
-
-			// PUT /api/searches  (replace whole list)
-			mux.HandleFunc("/api/searches", func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPut {
-					http.Error(w, "method", http.StatusMethodNotAllowed)
-					return
-				}
-				var arr []SearchItem
-				if err := json.NewDecoder(r.Body).Decode(&arr); err != nil {
-					http.Error(w, "bad json", 400)
-					return
-				}
-				searches.replace(arr)
-				_ = json.NewEncoder(w).Encode(map[string]any{"updated": len(arr)})
-			})
-
-			// DELETE /api/searches/:id
-			mux.HandleFunc("/api/searches/", func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodDelete {
-					http.Error(w, "method", http.StatusMethodNotAllowed)
-					return
-				}
-				id := strings.TrimPrefix(r.URL.Path, "/api/searches/")
-				items := searches.getAll()
-				out := make([]SearchItem, 0, len(items))
-				for _, it := range items {
-					if it.ID != id {
-						out = append(out, it)
-					}
-				}
-				searches.replace(out)
-				w.WriteHeader(http.StatusNoContent)
-			})
-
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+	})
+
+	// /api/searches (GET list, POST upsert, PUT replace)
+	mux.HandleFunc("/api/searches", func(w http.ResponseWriter, r *http.Request) {
+		if isVerbose() {
+			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
+		}
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(searches.getAll())
+			return
+		case http.MethodPost:
+			var in struct {
+				Query  string `json:"query"`
+				Label  string `json:"label"`
+				Pinned bool   `json:"pinned"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			it := searches.upsertRaw(in.Query, in.Label, in.Pinned)
+			if it.ID == "" {
+				http.Error(w, "empty query", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(it)
+			return
+		case http.MethodPut:
+			var arr []SearchItem
+			if err := json.NewDecoder(r.Body).Decode(&arr); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			searches.replace(arr)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"updated": len(arr)})
+			return
+		default:
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+	})
+
+	// /api/searches/{id} (DELETE)
+	mux.HandleFunc("/api/searches/", func(w http.ResponseWriter, r *http.Request) {
+		if isVerbose() {
+			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
+		}
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/api/searches/")
+		if id == "" || strings.Contains(id, "/") {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		items := searches.getAll()
+		out := make([]SearchItem, 0, len(items))
+		for _, it := range items {
+			if it.ID != id {
+				out = append(out, it)
+			}
+		}
+		searches.replace(out)
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	// Static UI from embedded FS at root
