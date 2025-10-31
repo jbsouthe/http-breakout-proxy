@@ -400,23 +400,44 @@ func loadAll(path string) ([]Capture, []ColorRule, error) {
 		return pd.Captures, pd.ColorRules, nil
 	}
 
-	// Fallback 1: plain []Capture
-	var caps []Capture
-	if err := json.Unmarshal(b, &caps); err == nil {
-		return caps, nil, nil
-	}
-
-	// Fallback 2: object with "captures" only (defensive)
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(b, &obj); err == nil {
-		if raw, ok := obj["captures"]; ok {
-			if err := json.Unmarshal(raw, &caps); err == nil {
-				return caps, nil, nil
-			}
-		}
-	}
-
 	return nil, nil, fmt.Errorf("unrecognized persistence format")
+}
+
+func defaultColorRules() []ColorRule {
+	return []ColorRule{
+		{
+			ID:       "1",
+			Color:    "#e74c3c", // red
+			Query:    "status:5",
+			Priority: 100,
+			Note:     "Failed HTTP request, 5xx Errors",
+			Enabled:  true,
+		},
+		{
+			ID:       "2",
+			Color:    "#d77d28", // orange
+			Query:    "status:4",
+			Priority: 100,
+			Note:     "Failed HTTP request, 4xx Errors",
+			Enabled:  true,
+		},
+		{
+			ID:       "3",
+			Color:    "#3498db", // blue
+			Query:    "method:POST",
+			Priority: 0,
+			Note:     "General API traffic",
+			Enabled:  true,
+		},
+		{
+			ID:       "4",
+			Color:    "#2ecc71", // green
+			Query:    "method:GET",
+			Priority: 0,
+			Note:     "GET request",
+			Enabled:  true,
+		},
+	}
 }
 
 func saveCapturesToFile(path string, list []Capture) error {
@@ -837,6 +858,8 @@ func main() {
 			rules.replace(crs)
 		} else if !os.IsNotExist(err) {
 			log.Printf("Warning: failed to load %s: %v", persistPath, err)
+		} else if os.IsNotExist(err) {
+			rules.replace(defaultColorRules())
 		}
 
 		// periodic save
