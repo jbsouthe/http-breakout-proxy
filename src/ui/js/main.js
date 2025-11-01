@@ -2,9 +2,11 @@ import { state, setFilterText, setCaptures, setSelectedId } from './state.js';
 import { fetchInitialData, startSSE, getPauseState, setPauseState, clearCaptures } from './api.js';
 import { refreshRulesFromServer } from './rules.js';
 import { renderList } from './list.js';
-import { selectCapture, blankDetails } from './details.js';
+import { selectCapture, blankDetails, renderDetails } from './details.js';
 import { bindSearchHistoryUI, initSearchHistory } from './searchHistory.js';
 import { openColorRulesManager } from './modal.js';
+import { startEventStream } from './sse.js';
+
 
 function debounce(fn, ms=120){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
@@ -67,6 +69,15 @@ async function bindUI() {
             openColorRulesManager();
         });
     }
+
+    startEventStream();
+    window.addEventListener('captures-updated', (e) => {
+        renderList();
+        if (state.selectedId === e.detail.id) {
+            const c = state.captures.find(x => x.id === state.selectedId);
+            if (c) renderDetails(c);
+        }
+    });
 }
 
 async function loadInitial() {
