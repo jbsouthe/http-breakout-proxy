@@ -22,10 +22,17 @@ export function on(topic, fn){ if(!topics.has(topic)) topics.set(topic,new Set()
 export function off(topic, fn){ const s=topics.get(topic); if(s) s.delete(fn); }
 export function emit(topic, payload){ const s=topics.get(topic); if(!s) return; for(const fn of s) fn(payload); }
 
-export function upsertCapture(c) {
-    const i = state.captures.findIndex(x => x.id === c.id);
-    if (i >= 0) state.captures[i] = c; else state.captures.push(c);
-    window.dispatchEvent(new CustomEvent('captures-updated', { detail: { id: c.id }}));
+export function upsertCapture(capture) {
+    const arr = state.captures;
+    const i = arr.findIndex(x => x.id === capture.id);
+
+    if (i >= 0) {
+        arr[i] = capture;
+    } else {
+        arr.unshift(capture); // NEWEST FIRST
+    }
+
+    window.dispatchEvent(new CustomEvent('captures-updated', { detail: { id: capture.id } }));
 }
 
 export function getCaptures() { return state.captures; } // avoid stale copies

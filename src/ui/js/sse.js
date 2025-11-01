@@ -1,17 +1,15 @@
 // sse.js
 import { upsertCapture } from './state.js';
+import { prependRowIfVisible } from './list.js';
 
+let es = null;
 export function startEventStream() {
-    const es = new EventSource('/events');
-
-    es.onopen = () => console.log('[SSE] open');
-    es.onmessage = ev => {
-        try {
-            const cap = JSON.parse(ev.data);
-            upsertCapture(cap); // mutate state and emit a UI event
-        } catch (e) {
-            console.error('[SSE] parse error', e, ev.data);
-        }
+    if (es) return es;             // singleton guard
+    es = new EventSource('/events');
+    es.onmessage = (ev) => {
+        try { upsertCapture(JSON.parse(ev.data)); }
+        catch (e) { console.error('SSE parse error', e); }
     };
-    es.onerror = err => console.warn('[SSE] error', err);
+    es.onerror = (e) => console.warn('SSE error', e);
+    return es;
 }
