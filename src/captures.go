@@ -34,6 +34,9 @@ type Capture struct {
 	ServerAddr string `json:"server_addr,omitempty"` // ip:port of origin
 	ReusedConn bool   `json:"reused_conn,omitempty"`
 	HTTP2      bool   `json:"h2,omitempty"` // negotiated h2
+
+	// GRPC specific
+	GRPC *GRPCSample `json:"grpc,omitempty"`
 }
 
 type captureStore struct {
@@ -42,6 +45,23 @@ type captureStore struct {
 	next  int
 	count int
 	seq   int64
+}
+
+// types.go
+
+type GRPCSample struct {
+	ServiceMethod string            `json:"service_method"` // e.g., "/pkg.Svc/Method"
+	Encoding      string            `json:"encoding"`       // "identity" | "gzip" | ...
+	ReqFrames     []GRPCFrameSample `json:"req_frames,omitempty"`
+	RespFrames    []GRPCFrameSample `json:"resp_frames,omitempty"`
+	TrailerStatus string            `json:"trailer_status,omitempty"`  // grpc-status (stringified)
+	TrailerMsg    string            `json:"trailer_message,omitempty"` // grpc-message (unescaped)
+}
+
+type GRPCFrameSample struct {
+	Compressed bool   `json:"compressed"`
+	Size       int    `json:"size"`   // decoded size used for preview
+	Base64     string `json:"base64"` // base64 of decoded payload (after decompression)
 }
 
 func newCaptureStore(cap int) *captureStore {

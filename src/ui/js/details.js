@@ -5,6 +5,16 @@ import { buildCurlFromCapture, buildPythonFromCapture } from './exports.js';
 import { renderTimingGanttForCapture } from './timings.js';
 import { renderList, updateRowSelectionHighlight } from './list.js';
 
+const DETAILS_SELECTOR = 'details'; // <-- ensure this matches your HTML
+
+function getDetailsEl() {
+    const el = document.getElementById(DETAILS_SELECTOR);
+    if (!el) {
+        console.warn(`[details] container not found for ${DETAILS_SELECTOR}`);
+    }
+    return el;
+}
+
 
 export function blankDetails() {
     renderDetails({
@@ -38,6 +48,8 @@ function renderCode(preEl, body, language) {
 }
 
 export function renderDetails(c) {
+    const el = getDetailsEl();
+    if (!el) return;
     const title = document.getElementById('titleLarge');
     const sub   = document.getElementById('subMeta');
     const reqHdrEl = document.getElementById('ov-req-headers');
@@ -135,7 +147,12 @@ export function renderDetails(c) {
 
     // Timing chart + force scroll to top
     renderTimingGanttForCapture(c);
+
     const detailsPanel = document.querySelector('.details');
+    if (c.grpc) {
+        const grpcSec = renderGRPCSection(c.grpc);
+        detailsPanel.appendChild(grpcSec);
+    }
     if (detailsPanel) detailsPanel.scrollTo({ top: 0, behavior: 'instant' });
 }
 
@@ -210,4 +227,64 @@ function downloadResponseBody(c) {
     const a = document.createElement('a');
     a.href = url; a.download = `response_${c.id||'capture'}.${ext}`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function decodeB64ToUtf8(b64) {
+    try {
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    } catch {
+        return null;
+    }
+}
+
+function renderGRPCSection(grpc) {
+    const wrap = document.createElement('div');
+    wrap.className = 'content';
+
+    const h = document.createElement('div');
+    h.innerHTML = `<div class="titleLarge">gRPC · <code>${escapeHtml(grpc.service_method || '')}</code></div>
+    <div class="subMeta">encoding=${escapeHtml(grpc.encoding||'identity')}
+      ${grpc.trailer_status ? ` · status=${grpc.trailer_status}` : ''}
+      ${grpc.trailer_message ? ` · message=${escapeHtml(grpc.trailer_message)}` : ''}</div>`;
+    wrap.appendChild(h);
+
+    const mkFrameList = (title, frames) => {
+        const sec = document.createElement('div');
+        sec.style.marginTop = '10px';
+        const t = document.createElement('div');
+        t.className = 'h-title';
+        t.textContent = `${title} (${frames.length})`;
+        sec.appendChild(t);
+
+        frames.forEach((f, idx) => {
+            const box = document.createElement('div');
+            box.className = 'boxed-text';
+            const txt = decodeB64ToUtf8(f.base64);
+            let body = txt;
+            // Heuristic: pretty-print if JSON
+            if (txt && txt.trim().startsWith('{') || txt && txt.trim().startsWith('[')) {
+                try { body = JSON.stringify(JSON.parse(txt), null, 2); } catch {}
+            }
+            if (!body) body = `[${f.size} bytes binary]`;
+            box.textContent = body;
+
+            const meta = document.createElement('div');
+            meta.className = 'subMeta';
+            meta.style.marginTop = '4px';
+            meta.textContent = `frame ${idx+1} · size=${f.size}${f.compressed ? ' · compressed' : ''}`;
+
+            sec.appendChild(box);
+            sec.appendChild(meta);
+        });
+        return sec;
+    };
+
+    if (grpc.req_frames && grpc.req_frames.length) {
+        wrap.appendChild(mkFrameList('Request frames', grpc.req_frames));
+    }
+    if (grpc.resp_frames && grpc.resp_frames.length) {
+        wrap.appendChild(mkFrameList('Response frames', grpc.resp_frames));
+    }
+    return wrap;
 }

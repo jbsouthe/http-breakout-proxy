@@ -21,3 +21,11 @@ const topics = new Map(); // topic -> Set<fn>
 export function on(topic, fn){ if(!topics.has(topic)) topics.set(topic,new Set()); topics.get(topic).add(fn); return ()=>off(topic,fn); }
 export function off(topic, fn){ const s=topics.get(topic); if(s) s.delete(fn); }
 export function emit(topic, payload){ const s=topics.get(topic); if(!s) return; for(const fn of s) fn(payload); }
+
+export function upsertCapture(c) {
+    const i = state.captures.findIndex(x => x.id === c.id);
+    if (i >= 0) state.captures[i] = c; else state.captures.push(c);
+    window.dispatchEvent(new CustomEvent('captures-updated', { detail: { id: c.id }}));
+}
+
+export function getCaptures() { return state.captures; } // avoid stale copies

@@ -35,6 +35,12 @@ export function renderList() {
         row.tabIndex = 0;
         row.addEventListener('keydown', e => { if (e.key === 'Enter') selectCapture(c.id); });
 
+        if (c.grpc) {
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.textContent = 'gRPC';
+            row.appendChild(badge);
+        }
         list.appendChild(row);
     });
 }

@@ -174,40 +174,7 @@ func buildUIHandler(store *captureStore, rules *ruleStore, broker *sseBroker, se
 	})
 
 	// SSE events
-	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
-		if isVerbose() {
-			log.Printf("UI Request URI: %s %s", r.Method, r.RequestURI)
-		}
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		ch := broker.addClient()
-		defer broker.removeClient(ch)
-
-		fmt.Fprintf(w, ": ok\n\n")
-		flusher.Flush()
-
-		notify := r.Context().Done()
-		for {
-			select {
-			case <-notify:
-				return
-			case c, ok := <-ch:
-				if !ok {
-					return
-				}
-				b, _ := json.Marshal(c)
-				fmt.Fprintf(w, "data: %s\n\n", b)
-				flusher.Flush()
-			}
-		}
-	})
+	mux.HandleFunc("/events", sseHandler(broker))
 
 	mux.HandleFunc("/api/pause", func(w http.ResponseWriter, r *http.Request) {
 		if isVerbose() {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
@@ -9,6 +10,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -19,6 +22,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +30,29 @@ import (
 	"time"
 
 	"github.com/elazarl/goproxy"
+	"golang.org/x/net/http2"
 )
+
+const maxGRPCSample = 256 << 10 // 256 KiB across frames
+
+const (
+	maxGRPCSampleBytes      = 256 << 10 // 256 KiB across frames (per direction)
+	maxGRPCFramesPerSide    = 4         // first N frames request/response
+	maxBytesPerFramePreview = 64 << 10  // bound decoded payload kept per frame
+)
+
+type grpcAgg struct {
+	ServiceMethod string
+	Encoding      string
+	Req           []GRPCFrameSample
+	Resp          []GRPCFrameSample
+	TrailerStatus string
+	TrailerMsg    string
+	reqBytes      int
+	respBytes     int
+}
+
+var grpcAggMap sync.Map // key(reqKey) -> *grpcAgg
 
 // buildProxyHandler configures and returns the proxy handler.
 func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker, caDur string) http.Handler {
@@ -36,6 +62,9 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
 		Proxy:             http.ProxyFromEnvironment,
 		ForceAttemptHTTP2: true,
+	}
+	if err := http2.ConfigureTransport(tr); err != nil {
+		log.Fatalf("http2 configure: %v", err)
 	}
 	proxy.Tr = tr
 
@@ -88,6 +117,48 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 			reqHeaders[k] = append([]string(nil), v...)
 		}
 		encoding := r.Header.Get("Content-Encoding")
+		if isGRPC(r) {
+			if r.Body != nil {
+				pass, mirror := teeBody(r.Body)
+				r.Body = pass
+
+				agg := &grpcAgg{
+					ServiceMethod: r.URL.EscapedPath(),
+					Encoding:      grpcEncoding(r.Header),
+				}
+				grpcAggMap.Store(key, agg)
+
+				go func(k string, hdr http.Header, mr io.Reader) {
+					enc := grpcEncoding(hdr)
+					frames, _, _ := parseGRPCFrames(mr, maxGRPCSampleBytes, enc)
+					if v, ok := grpcAggMap.Load(k); ok {
+						ga := v.(*grpcAgg)
+						for _, f := range frames {
+							if len(ga.Req) >= maxGRPCFramesPerSide {
+								break
+							}
+							ga.reqBytes += len(f.Payload)
+							ga.Req = append(ga.Req, makeFrameSample(f.Compressed, f.Payload))
+						}
+					}
+				}(key, r.Header.Clone(), mirror)
+			}
+
+			// For binary streaming, avoid dumping raw bytes in Capture.RequestBodyBase64.
+			bodyStr := "<grpc-request stream>"
+			c := Capture{
+				Time:              time.Now().UTC(),
+				Method:            r.Method,
+				URL:               r.URL.String(),
+				RequestHeaders:    reqHeaders,
+				RequestBodyBase64: bodyStr,
+				Notes:             fmt.Sprintf("pending (captured at %s)", start.Format(time.RFC3339)),
+			}
+			ctx.UserData = start
+			reqMap.Store(key, c)
+			r = r.WithContext(httptrace.WithClientTrace(r.Context(), ct))
+			return r, nil
+		}
 		bodyStr, newBody, err := readLimitedBody(r.Body, maxStoredBody, encoding)
 		if err != nil {
 			log.Printf("error reading request body: %v", err)
@@ -146,6 +217,105 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 		}
 
 		encoding := resp.Header.Get("Content-Encoding")
+		if isGRPC(ctx.Req) {
+			if resp.Body != nil {
+				pass, mirror := teeBody(resp.Body)
+				resp.Body = pass
+
+				go func(k string, h http.Header, tr *http.Header, mr io.Reader) {
+					frames, _, _ := parseGRPCFrames(mr, maxGRPCSampleBytes, grpcEncoding(h))
+					var st, msg string
+					if tr != nil {
+						st = tr.Get("grpc-status")
+						umsg, _ := url.QueryUnescape(tr.Get("grpc-message"))
+						msg = umsg
+					}
+					if v, ok := grpcAggMap.Load(k); ok {
+						ga := v.(*grpcAgg)
+						for _, f := range frames {
+							if len(ga.Resp) >= maxGRPCFramesPerSide {
+								break
+							}
+							ga.respBytes += len(f.Payload)
+							ga.Resp = append(ga.Resp, makeFrameSample(f.Compressed, f.Payload))
+						}
+						if st != "" {
+							ga.TrailerStatus = st
+							ga.TrailerMsg = msg
+						}
+					}
+				}(key, resp.Header.Clone(), &resp.Trailer, mirror)
+			}
+
+			// Copy response headers now; we’ll finalize GRPC field below.
+			rh := make(map[string][]string, len(resp.Header))
+			for k, v := range resp.Header {
+				rh[k] = append([]string(nil), v...)
+			}
+
+			var durationMs int64
+			if st, ok := ctx.UserData.(time.Time); ok {
+				durationMs = time.Since(st).Milliseconds()
+			}
+
+			if partial.Name == "" {
+				partial.Name = fmt.Sprintf("%s %s [%d]", partial.Method, partial.URL, resp.StatusCode)
+			}
+			partial.ResponseStatus = resp.StatusCode
+			partial.ResponseHeaders = rh
+			partial.ResponseBodyBase64 = "<grpc-response stream>"
+			partial.DurationMs = durationMs
+			partial.Notes = "" // no longer overloading Notes
+
+			// Merge aggregated gRPC into Capture
+			if v, ok := grpcAggMap.Load(key); ok {
+				ga := v.(*grpcAgg)
+				partial.GRPC = &GRPCSample{
+					ServiceMethod: ga.ServiceMethod,
+					Encoding:      ga.Encoding,
+					ReqFrames:     ga.Req,
+					RespFrames:    ga.Resp,
+					TrailerStatus: ga.TrailerStatus,
+					TrailerMsg:    ga.TrailerMsg,
+				}
+				grpcAggMap.Delete(key)
+			} else {
+				// Fallback: minimally mark as gRPC
+				partial.GRPC = &GRPCSample{
+					ServiceMethod: ctx.Req.URL.EscapedPath(),
+					Encoding:      grpcEncoding(resp.Header),
+				}
+			}
+
+			// timings you already compute (keep your existing phase merge here)
+			if v, ok := phaseMap.Load(key); ok {
+				p := v.(*phases)
+				if p.done.IsZero() {
+					p.done = time.Now()
+				}
+				partial.DNSMs = millis(p.dnsStart, p.dnsEnd)
+				partial.ConnectMs = millis(p.conStart, p.conEnd)
+				partial.TLSMs = millis(p.tlsStart, p.tlsEnd)
+				partial.TTFBMs = millis(p.wroteReq, p.firstByte)
+				partial.RespReadMs = millis(p.firstByte, p.done)
+				partial.TotalMs = millis(p.startRT, p.done)
+				partial.ServerAddr = p.serverAddr
+				partial.ReusedConn = p.reused
+				if resp.Request != nil && resp.Request.TLS != nil {
+					partial.HTTP2 = (resp.Request.TLS.NegotiatedProtocol == "h2")
+				} else {
+					partial.HTTP2 = p.h2
+				}
+				phaseMap.Delete(key)
+			}
+
+			stored := store.add(partial)
+			broker.publish(stored)
+			reqMap.Delete(key)
+
+			log.Printf("Response '%s' Status %s [gRPC %s]", resp.Request.URL.String(), resp.Status, partial.GRPC.ServiceMethod)
+			return resp
+		}
 		respBodyStr, newRespBody, err := readLimitedBody(resp.Body, maxStoredBody, strings.ToLower(encoding))
 		if err != nil {
 			respBodyStr = "--resp-body-read-error--"
@@ -341,9 +511,13 @@ func enableMITM(proxy *goproxy.ProxyHttpServer, persist bool, dir string) error 
 
 	// Upstream transport: we usually skip verification since we’re intercepting
 	proxy.Tr = &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		Proxy:             http.ProxyFromEnvironment,
+		ForceAttemptHTTP2: true,
 	}
-
+	if err := http2.ConfigureTransport(proxy.Tr); err != nil {
+		log.Printf("http2 configure (MITM transport): %v", err)
+	}
 	return nil
 }
 
@@ -472,5 +646,107 @@ func maybeDecompress(body []byte, encoding string) []byte {
 		return out
 	default:
 		return body
+	}
+}
+
+// gRPC detection (gRPC and gRPC-Web)
+func isGRPC(req *http.Request) bool {
+	ct := strings.ToLower(req.Header.Get("Content-Type"))
+	return strings.HasPrefix(ct, "application/grpc")
+}
+
+func grpcEncoding(h http.Header) string {
+	enc := strings.TrimSpace(strings.ToLower(h.Get("grpc-encoding")))
+	if enc == "" {
+		return "identity"
+	}
+	return enc
+}
+
+// Tee the body so we can parse without consuming the upstream stream
+type tapRC struct {
+	r  io.ReadCloser
+	pw *io.PipeWriter
+}
+
+func (t *tapRC) Read(p []byte) (int, error) { return t.r.Read(p) }
+func (t *tapRC) Close() error               { _ = t.pw.Close(); return t.r.Close() }
+
+func teeBody(rc io.ReadCloser) (pass io.ReadCloser, mirror io.Reader) {
+	pr, pw := io.Pipe()
+	tr := io.TeeReader(rc, pw)
+	return &tapRC{r: io.NopCloser(tr), pw: pw}, pr
+}
+
+// gRPC frame parser: [compressed:1][len:4 big-endian][payload:len]
+type grpcFrame struct {
+	Compressed bool
+	Payload    []byte
+}
+
+func parseGRPCFrames(r io.Reader, maxBytes int, enc string) ([]grpcFrame, int, error) {
+	const hdrLen = 5
+	var frames []grpcFrame
+	var total int
+	br := bufio.NewReader(r)
+	for total < maxBytes {
+		hdr := make([]byte, hdrLen)
+		if _, err := io.ReadFull(br, hdr); err != nil {
+			if errors.Is(err, io.EOF) {
+				return frames, total, nil
+			}
+			return frames, total, err
+		}
+		compressed := hdr[0] == 1
+		n := int(binary.BigEndian.Uint32(hdr[1:5]))
+		if n < 0 {
+			return frames, total, fmt.Errorf("negative frame length")
+		}
+		if n == 0 {
+			frames = append(frames, grpcFrame{Compressed: compressed, Payload: nil})
+			continue
+		}
+		need := n
+		if need > maxBytes-total {
+			need = maxBytes - total
+		}
+		buf := make([]byte, need)
+		if _, err := io.ReadFull(br, buf); err != nil {
+			return frames, total, err
+		}
+		// drain remainder of the frame if truncated
+		if need < n {
+			if _, err := io.CopyN(io.Discard, br, int64(n-need)); err != nil {
+				return frames, total, err
+			}
+		}
+		total += need
+
+		// optional gzip decompression if flag set or header says gzip
+		payload := buf
+		if compressed || enc == "gzip" {
+			if zr, zerr := gzip.NewReader(bytes.NewReader(buf)); zerr == nil {
+				if dec, derr := io.ReadAll(zr); derr == nil {
+					payload = dec
+				}
+				_ = zr.Close()
+			}
+		}
+		frames = append(frames, grpcFrame{Compressed: compressed, Payload: payload})
+	}
+	return frames, total, nil
+}
+
+func b64(s []byte) string { return base64.StdEncoding.EncodeToString(s) }
+
+// trim frame payload for preview & store metadata
+func makeFrameSample(compressed bool, decoded []byte) GRPCFrameSample {
+	if len(decoded) > maxBytesPerFramePreview {
+		decoded = decoded[:maxBytesPerFramePreview]
+	}
+	return GRPCFrameSample{
+		Compressed: compressed,
+		Size:       len(decoded),
+		Base64:     b64(decoded),
 	}
 }
