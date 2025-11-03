@@ -148,6 +148,18 @@ export function renderDetails(c) {
     // Timing chart + force scroll to top
     renderTimingGanttForCapture(c);
 
+    //GRPC stuff
+    const grpc = c.grpc;
+    if (grpc) {
+        document.getElementById('grpc-details').style.display = "";
+        const grpcMethod = document.getElementById('ov-grpc-method');
+        grpcMethod.value = grpc.service_method;
+        const grpcStatus = document.getElementById('ov-grpc-status');
+        grpcStatus.value = grpc.trailer_status;
+        const grpcMessage = document.getElementById('ov-grpc-message');
+        grpcMessage.value = grpc.trailer_message;
+    }
+
     const detailsPanel = document.querySelector('.details');
     if (c.grpc) {
         const grpcSec = renderGRPCSection(c.grpc);
