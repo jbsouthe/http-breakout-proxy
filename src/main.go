@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -21,7 +22,7 @@ var (
 
 func setVerbose(b bool) { verbose.Store(b) }
 func isVerbose() bool   { return verbose.Load() }
-func isPaused() bool { return paused.Load() }
+func isPaused() bool    { return paused.Load() }
 
 type PersistedData struct {
 	Captures    []Capture    `json:"captures"`
@@ -127,13 +128,21 @@ func main() {
 
 	// Combined handler: route proxy-style requests to proxy; everything else to UI
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Proxy requests are either CONNECT or have an absolute URL (non-empty scheme).
-		if r.Method == http.MethodConnect || (r.URL != nil && r.URL.Scheme != "") {
+		if r.Method == http.MethodConnect {
 			proxyHandler.ServeHTTP(w, r)
 			return
 		}
-		// Otherwise treat as UI/API/SSE/static request
-		uiHandler.ServeHTTP(w, r)
+		switch {
+		case r.URL.Path == "/events",
+			strings.HasPrefix(r.URL.Path, "/api/"),
+			strings.HasSuffix(r.URL.Path, ".js"),
+			strings.HasSuffix(r.URL.Path, ".css"),
+			strings.HasSuffix(r.URL.Path, ".html"),
+			r.URL.Path == "/":
+			uiHandler.ServeHTTP(w, r)
+		default:
+			proxyHandler.ServeHTTP(w, r)
+		}
 	})
 
 	log.Printf("Listening on %s for Proxy+UI (single-port).", *listen)
