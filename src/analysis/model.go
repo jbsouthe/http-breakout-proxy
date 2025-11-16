@@ -96,45 +96,6 @@ func (r *Registry) OnRequest(ev *ObservedRequest) {
 }
 
 //
-// 2. Retry / duplicate request detection
-//
-
-// RetryKey groups “similar” requests for retry analysis.
-type RetryKey struct {
-	Client   ClientID
-	Method   string
-	Path     string
-	ReqSig   uint64 // hash of headers/body fingerprint if you want that
-	Host     string
-	QuerySig uint64 // optional hash of query parameters
-}
-
-// RetryState tracks retry statistics for a given key in a short window.
-type RetryState struct {
-	LastTimestamp time.Time
-	Count         int64
-	LastStatus    int
-	LastOutcome   Outcome
-}
-
-// RetryAnalyzer keeps a map from RetryKey to RetryState.
-type RetryAnalyzer struct {
-	Window     time.Duration
-	ByRetryKey map[RetryKey]*RetryState
-}
-
-func NewRetryAnalyzer(window time.Duration) *RetryAnalyzer {
-	return &RetryAnalyzer{
-		Window:     window,
-		ByRetryKey: make(map[RetryKey]*RetryState),
-	}
-}
-
-func (r *RetryAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Derive RetryKey and update RetryState.
-}
-
-//
 // 3. Latency distribution profiling per route
 //
 

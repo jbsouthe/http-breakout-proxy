@@ -6,7 +6,7 @@ import { selectCapture, blankDetails, renderDetails } from './details.js';
 import { bindSearchHistoryUI, initSearchHistory } from './searchHistory.js';
 import { openColorRulesManager } from './modal.js';
 import { startEventStream } from './sse.js';
-import { initTemporalChart } from './analysis.js';
+import { initAnalysisUI } from './analysis.js';
 
 
 function debounce(fn, ms=120){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
@@ -96,7 +96,7 @@ async function init() {
     await loadInitial();
     startSSE();
 
-    await initTemporalChart();
+    await initAnalysisUI();
 }
 
 init();

@@ -9,6 +9,89 @@ import (
 	"time"
 )
 
+type retryOutcome string
+
+func mapOutcome(o analysis.Outcome) retryOutcome {
+	switch o {
+	case analysis.Outcome2xx:
+		return "2xx"
+	case analysis.Outcome3xx:
+		return "3xx"
+	case analysis.Outcome4xx:
+		return "4xx"
+	case analysis.Outcome5xx:
+		return "5xx"
+	case analysis.OutcomeNetworkError:
+		return "network_error"
+	default:
+		return "other"
+	}
+}
+
+// RetryDTO is the JSON shape we expose for each hot retry key.
+type RetryDTO struct {
+	ClientIP      string       `json:"client_ip"`
+	UserAgent     string       `json:"user_agent"`
+	ClientHint    string       `json:"client_hint"`
+	Method        string       `json:"method"`
+	Host          string       `json:"host"`
+	Path          string       `json:"path"`
+	Query         string       `json:"query"`
+	Count         int64        `json:"count"`
+	LastTimestamp time.Time    `json:"last_timestamp"`
+	LastStatus    int          `json:"last_status"`
+	LastOutcome   retryOutcome `json:"last_outcome"`
+}
+
+// handleRetryMetrics exposes retry/duplicate request info as JSON.
+//
+// Optional query param: ?min=<N> to require at least N requests in the burst.
+// Default is 2 (at least one retry).
+func handleRetryMetrics(w http.ResponseWriter, r *http.Request) {
+	if analysisRegistry == nil {
+		http.Error(w, "analysis registry not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	ra := analysisRegistry.Retry()
+	if ra == nil {
+		http.Error(w, "retry analyzer not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	minCount := int64(2) // default: at least one retry
+	if s := r.URL.Query().Get("min"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v > 0 {
+			minCount = v
+		}
+	}
+
+	snap := ra.Snapshot(minCount)
+
+	out := make([]RetryDTO, 0, len(snap))
+	for _, rs := range snap {
+		out = append(out, RetryDTO{
+			ClientIP:      rs.Client.IP,
+			UserAgent:     rs.Client.UserAgent,
+			ClientHint:    rs.Client.ClientHint,
+			Method:        rs.Method,
+			Host:          rs.Host,
+			Path:          rs.Path,
+			Query:         rs.Query,
+			Count:         rs.Count,
+			LastTimestamp: rs.LastTimestamp,
+			LastStatus:    rs.LastStatus,
+			LastOutcome:   mapOutcome(rs.LastOutcome),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 // temporalBucketDTO is a JSON-serializable representation of a temporal bucket.
 type temporalBucketDTO struct {
 	WindowStart   time.Time `json:"window_start"` // RFC3339 by default

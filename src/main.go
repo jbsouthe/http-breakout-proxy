@@ -129,6 +129,8 @@ func main() {
 		switch {
 		case r.URL.Path == "/metrics/temporal":
 			handleTemporalMetrics(w, r)
+		case r.URL.Path == "/metrics/retries":
+			handleRetryMetrics(w, r)
 		case r.URL.Path == "/events",
 			strings.HasPrefix(r.URL.Path, "/api/"),
 			strings.HasSuffix(r.URL.Path, ".js"),
