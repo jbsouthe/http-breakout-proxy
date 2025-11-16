@@ -236,6 +236,30 @@
                 </tbody>
             </table>
 
+            <h2>Auth / Cookie Stability</h2>
+            <table id="authCookieTable" class="table">
+                <thead>
+                <tr>
+                    <th>Client IP</th>
+                    <th>Host</th>
+                    <th>User Agent</th>
+                    <th>Total requests</th>
+                    <th>Auth present</th>
+                    <th>Auth missing</th>
+                    <th>Auth changes</th>
+                    <th>Cookie pattern changes</th>
+                    <th>Auth flapping</th>
+                    <th>Cookie drift</th>
+                    <th>Current cookie pattern</th>
+                    <th>First seen</th>
+                    <th>Last seen</th>
+                </tr>
+                </thead>
+                <tbody>
+                <!-- filled by analysis.js -->
+                </tbody>
+            </table>
+
         </div>
         <div id="tab-request" class="tab-pane" style="display:none">
             <pre id="req-body"></pre>

@@ -789,3 +789,120 @@ func handleClientFingerprintMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+type authCookieDTO struct {
+	ClientIP   string `json:"client_ip"`
+	ClientHint string `json:"client_hint"`
+	UserAgent  string `json:"user_agent"`
+	Host       string `json:"host"`
+
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+
+	TotalRequests int64 `json:"total_requests"`
+
+	AuthPresentCount int64            `json:"auth_present_count"`
+	AuthMissingCount int64            `json:"auth_missing_count"`
+	AuthChangeCount  int64            `json:"auth_change_count"`
+	AuthValues       map[string]int64 `json:"auth_values"`
+
+	CurrentCookiePattern     string           `json:"current_cookie_pattern"`
+	CookiePatternChangeCount int64            `json:"cookie_pattern_change_count"`
+	CookiePatterns           map[string]int64 `json:"cookie_patterns"`
+
+	HasAuthFlapping bool `json:"has_auth_flapping"`
+	HasCookieDrift  bool `json:"has_cookie_drift"`
+}
+
+// GET /metrics/authcookie/stability
+//
+// Query params (optional):
+//
+//	?min_requests=<N>  -> minimum total requests for a (client,host) pair (default: 5)
+//	?min_changes=<N>   -> minimum (auth+cookie) change count (default: 1)
+//	?limit=<K>         -> max number of rows (default: 100)
+func handleAuthCookieStability(w http.ResponseWriter, r *http.Request) {
+	if analysisRegistry == nil {
+		http.Error(w, "analysis registry not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	ac := analysisRegistry.AuthCookie()
+	if ac == nil {
+		http.Error(w, "auth/cookie analyzer not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+
+	minReq := int64(5)
+	if s := q.Get("min_requests"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
+			minReq = v
+		}
+	}
+
+	minChanges := int64(1)
+	if s := q.Get("min_changes"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
+			minChanges = v
+		}
+	}
+
+	limit := 100
+	if s := q.Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	snap := ac.Snapshot(minReq, minChanges)
+
+	dtos := make([]authCookieDTO, 0, len(snap))
+	for _, s := range snap {
+		dto := authCookieDTO{
+			ClientIP:   s.Client.IP,
+			ClientHint: s.Client.ClientHint,
+			UserAgent:  s.Client.UserAgent,
+			Host:       s.Host,
+
+			FirstSeen: s.FirstSeen,
+			LastSeen:  s.LastSeen,
+
+			TotalRequests: s.TotalRequests,
+
+			AuthPresentCount: s.AuthPresentCount,
+			AuthMissingCount: s.AuthMissingCount,
+			AuthChangeCount:  s.AuthChangeCount,
+			AuthValues:       s.AuthValues,
+
+			CurrentCookiePattern:     s.CurrentCookiePattern,
+			CookiePatternChangeCount: s.CookiePatternChangeCount,
+			CookiePatterns:           s.CookiePatterns,
+
+			HasAuthFlapping: s.HasAuthFlapping,
+			HasCookieDrift:  s.HasCookieDrift,
+		}
+		dtos = append(dtos, dto)
+	}
+
+	// Sort by “most unstable”: auth+cookie changes, then total requests
+	sort.Slice(dtos, func(i, j int) bool {
+		ci := dtos[i].AuthChangeCount + dtos[i].CookiePatternChangeCount
+		cj := dtos[j].AuthChangeCount + dtos[j].CookiePatternChangeCount
+		if ci != cj {
+			return ci > cj
+		}
+		return dtos[i].TotalRequests > dtos[j].TotalRequests
+	})
+
+	if len(dtos) > limit {
+		dtos = dtos[:limit]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(dtos); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}

@@ -141,6 +141,8 @@ func main() {
 			handleMethodPathAnomalies(w, r)
 		case r.URL.Path == "/metrics/clients/fingerprints":
 			handleClientFingerprintMetrics(w, r)
+		case r.URL.Path == "/metrics/authcookie/stability":
+			handleAuthCookieStability(w, r)
 		case r.URL.Path == "/events",
 			strings.HasPrefix(r.URL.Path, "/api/"),
 			strings.HasSuffix(r.URL.Path, ".js"),

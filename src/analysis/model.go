@@ -104,35 +104,6 @@ type QuantileEstimate struct {
 }
 
 //
-// 8. Auth / cookie header stability
-//
-
-// AuthState tracks stability of auth-related headers and cookie structure.
-type AuthState struct {
-	LastUpdated         time.Time
-	AuthHeaderPresent   bool
-	AuthHeaderLength    int
-	CookieKeySet        map[string]struct{}
-	CookieKeySetVersion uint64 // increment when structure changes
-	ChangeCount         int64
-}
-
-// AuthStabilityAnalyzer is keyed per ClientID.
-type AuthStabilityAnalyzer struct {
-	ByClient map[ClientID]*AuthState
-}
-
-func NewAuthStabilityAnalyzer() *AuthStabilityAnalyzer {
-	return &AuthStabilityAnalyzer{
-		ByClient: make(map[ClientID]*AuthState),
-	}
-}
-
-func (a *AuthStabilityAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Extract Authorization header + cookie keys and compare to previous.
-}
-
-//
 // 9. Response entropy / content-type drift
 //
 
@@ -174,7 +145,7 @@ func NewDefaultRegistry() *Registry {
 		NewSizeAnalyzer(),
 		NewClientFingerprintAnalyzer(),
 		NewMethodPathAnalyzer(),
-		NewAuthStabilityAnalyzer(),
+		NewAuthCookieAnalyzer(),
 		NewEntropyAnalyzer(),
 	)
 }

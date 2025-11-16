@@ -728,6 +728,129 @@ async function initClientFingerprintTable() {
     renderClientFingerprintTable(rows);
 }
 
+async function fetchAuthCookieStability(minRequests = 5, minChanges = 1, limit = 100) {
+    const params = new URLSearchParams();
+    if (minRequests >= 0) params.set('min_requests', String(minRequests));
+    if (minChanges >= 0) params.set('min_changes', String(minChanges));
+    if (limit > 0) params.set('limit', String(limit));
+
+    const res = await fetch(`/metrics/authcookie/stability?${params.toString()}`);
+    if (!res.ok) {
+        throw new Error('Failed to fetch auth/cookie stability metrics: ' + res.status);
+    }
+    return res.json();
+}
+
+function renderAuthCookieTable(rows) {
+    const table = document.getElementById('authCookieTable');
+    if (!table) {
+        return;
+    }
+    const tbody = table.querySelector('tbody');
+    if (!tbody) {
+        return;
+    }
+
+    while (tbody.firstChild) {
+        tbody.removeChild(tbody.firstChild);
+    }
+
+    if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 13;
+        td.textContent = 'No significant auth/cookie instability detected yet.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
+
+    const fmtTs = ts => {
+        if (!ts) return '';
+        const d = new Date(ts);
+        return d.toLocaleString();
+    };
+
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+
+        const ipCell = document.createElement('td');
+        ipCell.textContent = row.client_ip || '';
+
+        const hostCell = document.createElement('td');
+        hostCell.textContent = row.host || '';
+
+        const uaCell = document.createElement('td');
+        const ua = row.user_agent || '';
+        uaCell.textContent = ua.length > 60 ? ua.slice(0, 57) + '…' : ua;
+        uaCell.title = ua;
+
+        const totalCell = document.createElement('td');
+        totalCell.textContent = String(row.total_requests);
+
+        const presentCell = document.createElement('td');
+        presentCell.textContent = String(row.auth_present_count);
+
+        const missingCell = document.createElement('td');
+        missingCell.textContent = String(row.auth_missing_count);
+
+        const authChangeCell = document.createElement('td');
+        authChangeCell.textContent = String(row.auth_change_count);
+
+        const cookieChangeCell = document.createElement('td');
+        cookieChangeCell.textContent = String(row.cookie_pattern_change_count);
+
+        const authFlapCell = document.createElement('td');
+        authFlapCell.textContent = row.has_auth_flapping ? 'yes' : '';
+
+        const cookieDriftCell = document.createElement('td');
+        cookieDriftCell.textContent = row.has_cookie_drift ? 'yes' : '';
+
+        const patternCell = document.createElement('td');
+        patternCell.textContent = row.current_cookie_pattern || '';
+
+        const firstCell = document.createElement('td');
+        firstCell.textContent = fmtTs(row.first_seen);
+
+        const lastCell = document.createElement('td');
+        lastCell.textContent = fmtTs(row.last_seen);
+
+        tr.appendChild(ipCell);
+        tr.appendChild(hostCell);
+        tr.appendChild(uaCell);
+        tr.appendChild(totalCell);
+        tr.appendChild(presentCell);
+        tr.appendChild(missingCell);
+        tr.appendChild(authChangeCell);
+        tr.appendChild(cookieChangeCell);
+        tr.appendChild(authFlapCell);
+        tr.appendChild(cookieDriftCell);
+        tr.appendChild(patternCell);
+        tr.appendChild(firstCell);
+        tr.appendChild(lastCell);
+
+        tbody.appendChild(tr);
+    }
+}
+
+async function initAuthCookieTable() {
+    const table = document.getElementById('authCookieTable');
+    if (!table) {
+        return;
+    }
+
+    let rows;
+    try {
+        rows = await fetchAuthCookieStability(5, 1, 100);
+    } catch (err) {
+        console.error(err);
+        return;
+    }
+
+    renderAuthCookieTable(rows);
+}
+
+
 
 //
 // ---- Public entrypoint the rest of the app calls ----
@@ -742,4 +865,5 @@ export async function initAnalysisUI() {
     await initRouteSizeTable();
     await initEndpointAnomalyTable();
     await initClientFingerprintTable();
+    await initAuthCookieTable();
 }
