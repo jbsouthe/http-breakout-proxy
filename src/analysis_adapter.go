@@ -5,9 +5,108 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"time"
 )
+
+type routeLatencyDTO struct {
+	Method      string    `json:"method"`
+	Host        string    `json:"host"`
+	Path        string    `json:"path"`
+	Count       int64     `json:"count"`
+	MeanMs      float64   `json:"mean_ms"`
+	StdDevMs    float64   `json:"stddev_ms"`
+	MinMs       float64   `json:"min_ms"`
+	MaxMs       float64   `json:"max_ms"`
+	LastUpdated time.Time `json:"last_updated"`
+}
+
+// handleRouteLatencyMetrics exposes per-route latency stats.
+//
+// Optional query params:
+//
+//	?min=<N>    -> minimum count per route (default 10)
+//	?limit=<K>  -> max number of routes to return (default 100)
+//
+// Routes are sorted by descending MeanMs.
+func handleRouteLatencyMetrics(w http.ResponseWriter, r *http.Request) {
+	if analysisRegistry == nil {
+		http.Error(w, "analysis registry not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	la := analysisRegistry.Latency()
+	if la == nil {
+		http.Error(w, "latency analyzer not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Parse query params
+	q := r.URL.Query()
+
+	minCount := int64(10)
+	if s := q.Get("min"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v > 0 {
+			minCount = v
+		}
+	}
+
+	limit := 100
+	if s := q.Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	// Snapshot from analyzer
+	snap := la.Snapshot(minCount)
+	if len(snap) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]routeLatencyDTO{})
+		return
+	}
+
+	// Convert to DTOs
+	dtos := make([]routeLatencyDTO, 0, len(snap))
+	for _, s := range snap {
+		dto := routeLatencyDTO{
+			Method:      s.Route.Method,
+			Host:        s.Route.Host,
+			Path:        s.Route.Path,
+			Count:       s.Count,
+			MeanMs:      float64(s.Mean) / 1e6,
+			StdDevMs:    float64(s.StdDev) / 1e6,
+			MinMs:       float64(s.Min) / 1e6,
+			MaxMs:       float64(s.Max) / 1e6,
+			LastUpdated: s.LastUpdated,
+		}
+		dtos = append(dtos, dto)
+	}
+
+	// Sort by descending mean latency
+	// (you can sort by MaxMs if you prefer tail behavior)
+	sort.Slice(dtos, func(i, j int) bool {
+		// NaN guard
+		if math.IsNaN(dtos[i].MeanMs) {
+			return false
+		}
+		if math.IsNaN(dtos[j].MeanMs) {
+			return true
+		}
+		return dtos[i].MeanMs > dtos[j].MeanMs
+	})
+
+	if len(dtos) > limit {
+		dtos = dtos[:limit]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(dtos); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
 
 type retryOutcome string
 

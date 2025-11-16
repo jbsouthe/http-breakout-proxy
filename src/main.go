@@ -131,6 +131,8 @@ func main() {
 			handleTemporalMetrics(w, r)
 		case r.URL.Path == "/metrics/retries":
 			handleRetryMetrics(w, r)
+		case r.URL.Path == "/metrics/latency/routes":
+			handleRouteLatencyMetrics(w, r)
 		case r.URL.Path == "/events",
 			strings.HasPrefix(r.URL.Path, "/api/"),
 			strings.HasSuffix(r.URL.Path, ".js"),

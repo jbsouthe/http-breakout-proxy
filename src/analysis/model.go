@@ -107,33 +107,6 @@ type QuantileEstimate struct {
 	P99 time.Duration
 }
 
-// LatencyStats holds running stats + optional structure for histograms.
-type LatencyStats struct {
-	Count          int64
-	Total          time.Duration
-	Squared        float64
-	Max            time.Duration
-	Min            time.Duration
-	LastUpdated    time.Time
-	Quantiles      QuantileEstimate
-	InternalHandle interface{} // plug in HDR/t-digest implementation here
-}
-
-// LatencyAnalyzer maps RouteKey -> LatencyStats.
-type LatencyAnalyzer struct {
-	ByRoute map[RouteKey]*LatencyStats
-}
-
-func NewLatencyAnalyzer() *LatencyAnalyzer {
-	return &LatencyAnalyzer{
-		ByRoute: make(map[RouteKey]*LatencyStats),
-	}
-}
-
-func (l *LatencyAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Look up route stats and update.
-}
-
 //
 // 4. Error-state transition analysis per client
 //

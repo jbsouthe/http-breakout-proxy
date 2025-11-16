@@ -186,6 +186,110 @@ async function initRetryTable() {
     renderRetryTable(rows);
 }
 
+// ----- Per-route latency (backend: /metrics/latency/routes) -----
+
+async function fetchRouteLatency(minCount = 10, limit = 100) {
+    const params = new URLSearchParams();
+    if (minCount > 0) params.set('min', String(minCount));
+    if (limit > 0) params.set('limit', String(limit));
+
+    const res = await fetch(`/metrics/latency/routes?${params.toString()}`);
+    if (!res.ok) {
+        throw new Error('Failed to fetch route latency metrics: ' + res.status);
+    }
+    return res.json();
+}
+
+
+function renderRouteLatencyTable(rows) {
+    const table = document.getElementById('routeLatencyTable');
+    if (!table) {
+        return;
+    }
+    const tbody = table.querySelector('tbody');
+    if (!tbody) {
+        return;
+    }
+
+    // Clear existing rows
+    while (tbody.firstChild) {
+        tbody.removeChild(tbody.firstChild);
+    }
+
+    if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 9;
+        td.textContent = 'No routes with sufficient samples yet.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
+
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+
+        const methodCell = document.createElement('td');
+        methodCell.textContent = row.method;
+
+        const hostCell = document.createElement('td');
+        hostCell.textContent = row.host;
+
+        const pathCell = document.createElement('td');
+        pathCell.textContent = row.path;
+
+        const countCell = document.createElement('td');
+        countCell.textContent = String(row.count);
+
+        const meanCell = document.createElement('td');
+        meanCell.textContent = row.mean_ms.toFixed(2);
+
+        const stddevCell = document.createElement('td');
+        stddevCell.textContent = row.stddev_ms.toFixed(2);
+
+        const minCell = document.createElement('td');
+        minCell.textContent = row.min_ms.toFixed(2);
+
+        const maxCell = document.createElement('td');
+        maxCell.textContent = row.max_ms.toFixed(2);
+
+        const lastCell = document.createElement('td');
+        const last = row.last_updated ? new Date(row.last_updated) : null;
+        lastCell.textContent = last ? last.toLocaleString() : '';
+
+        tr.appendChild(methodCell);
+        tr.appendChild(hostCell);
+        tr.appendChild(pathCell);
+        tr.appendChild(countCell);
+        tr.appendChild(meanCell);
+        tr.appendChild(stddevCell);
+        tr.appendChild(minCell);
+        tr.appendChild(maxCell);
+        tr.appendChild(lastCell);
+
+        tbody.appendChild(tr);
+    }
+}
+
+async function initRouteLatencyTable() {
+    const table = document.getElementById('routeLatencyTable');
+    if (!table) {
+        return;
+    }
+
+    let rows;
+    try {
+        // Require at least 10 samples per route, return top 100 by mean_ms.
+        rows = await fetchRouteLatency(10, 100);
+    } catch (err) {
+        console.error(err);
+        return;
+    }
+
+    renderRouteLatencyTable(rows);
+}
+
+
 //
 // ---- Public entrypoint the rest of the app calls ----
 //
@@ -194,4 +298,5 @@ export async function initAnalysisUI() {
     // both are safe no-ops if elements are missing
     await initTemporalChart();
     await initRetryTable();
+    await initRouteLatencyTable();
 }
