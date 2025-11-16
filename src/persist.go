@@ -32,7 +32,6 @@ func loadAll(path string) ([]Capture, []ColorRule, error) {
 		return nil, nil, err
 	}
 
-	// Try new format first
 	var pd PersistedData
 	if err := json.Unmarshal(b, &pd); err == nil && (pd.Captures != nil || pd.ColorRules != nil) {
 		return pd.Captures, pd.ColorRules, nil
