@@ -568,3 +568,125 @@ func handleRouteSizeMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+type methodPathDTO struct {
+	Method string `json:"method"`
+	Host   string `json:"host"`
+	Path   string `json:"path"`
+
+	Count     int64     `json:"count"`
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+
+	StatusCount map[string]int64 `json:"status_count"` // HTTP code -> count
+
+	NonStandardMethod bool `json:"non_standard_method"`
+	HighEntropyPath   bool `json:"high_entropy_path"`
+	Rare              bool `json:"rare"`
+}
+
+// GET /metrics/methods/anomalies
+//
+// Query params (optional):
+//
+//	?min=<N>   -> minimum Count threshold for non-anomalous endpoints
+//	             (anomalous ones are always included). Default: 0
+//	?limit=<K> -> max number of endpoints to return. Default: 100
+func handleMethodPathAnomalies(w http.ResponseWriter, r *http.Request) {
+	if analysisRegistry == nil {
+		http.Error(w, "analysis registry not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	mp := analysisRegistry.MethodPath()
+	if mp == nil {
+		http.Error(w, "method-path analyzer not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+
+	minCount := int64(0)
+	if s := q.Get("min"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
+			minCount = v
+		}
+	}
+
+	limit := 100
+	if s := q.Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	snap := mp.Snapshot(minCount)
+
+	// Filter down to “interesting” endpoints: anomalies or rare.
+	filtered := make([]methodPathDTO, 0, len(snap))
+	for _, s := range snap {
+		if !s.NonStandardMethod && !s.HighEntropyPath && !s.Rare {
+			continue
+		}
+
+		// Convert status map[int]int64 to map[string]int64 for JSON
+		statusMap := make(map[string]int64, len(s.StatusCount))
+		for code, count := range s.StatusCount {
+			statusMap[strconv.Itoa(code)] = count
+		}
+
+		filtered = append(filtered, methodPathDTO{
+			Method: s.Route.Method,
+			Host:   s.Route.Host,
+			Path:   s.Route.Path,
+
+			Count:     s.Count,
+			FirstSeen: s.FirstSeen,
+			LastSeen:  s.LastSeen,
+
+			StatusCount: statusMap,
+
+			NonStandardMethod: s.NonStandardMethod,
+			HighEntropyPath:   s.HighEntropyPath,
+			Rare:              s.Rare,
+		})
+	}
+
+	// Sort by “most suspicious”: non-standard first, then high-entropy,
+	// then rare, and within that by descending Count (most active).
+	sort.Slice(filtered, func(i, j int) bool {
+		ai := filtered[i]
+		aj := filtered[j]
+
+		score := func(x methodPathDTO) int {
+			s := 0
+			if x.NonStandardMethod {
+				s += 4
+			}
+			if x.HighEntropyPath {
+				s += 2
+			}
+			if x.Rare {
+				s += 1
+			}
+			return s
+		}
+
+		si := score(ai)
+		sj := score(aj)
+		if si != sj {
+			return si > sj
+		}
+		return ai.Count > aj.Count
+	})
+
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(filtered); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}

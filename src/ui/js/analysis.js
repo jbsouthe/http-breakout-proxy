@@ -500,6 +500,122 @@ async function initRouteSizeTable() {
     renderRouteSizeTable(rows);
 }
 
+async function fetchEndpointAnomalies(limit = 100) {
+    const params = new URLSearchParams();
+    if (limit > 0) params.set('limit', String(limit));
+
+    const res = await fetch(`/metrics/methods/anomalies?${params.toString()}`);
+    if (!res.ok) {
+        throw new Error('Failed to fetch endpoint anomaly metrics: ' + res.status);
+    }
+    return res.json();
+}
+
+function renderEndpointAnomalyTable(rows) {
+    const table = document.getElementById('endpointAnomalyTable');
+    if (!table) {
+        return;
+    }
+    const tbody = table.querySelector('tbody');
+    if (!tbody) {
+        return;
+    }
+
+    while (tbody.firstChild) {
+        tbody.removeChild(tbody.firstChild);
+    }
+
+    if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 10;
+        td.textContent = 'No anomalous endpoints detected yet.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
+
+    const formatTs = ts => {
+        if (!ts) return '';
+        const d = new Date(ts);
+        return d.toLocaleString();
+    };
+
+    const formatStatusMap = statusMap => {
+        if (!statusMap) return '';
+        const entries = Object.entries(statusMap);
+        if (!entries.length) return '';
+        // sort by code
+        entries.sort((a, b) => Number(a[0]) - Number(b[0]));
+        return entries.map(([code, count]) => `${code}×${count}`).join(', ');
+    };
+
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+
+        const methodCell = document.createElement('td');
+        methodCell.textContent = row.method;
+
+        const hostCell = document.createElement('td');
+        hostCell.textContent = row.host;
+
+        const pathCell = document.createElement('td');
+        pathCell.textContent = row.path;
+
+        const countCell = document.createElement('td');
+        countCell.textContent = String(row.count);
+
+        const nonStdCell = document.createElement('td');
+        nonStdCell.textContent = row.non_standard_method ? 'yes' : '';
+
+        const entropyCell = document.createElement('td');
+        entropyCell.textContent = row.high_entropy_path ? 'yes' : '';
+
+        const rareCell = document.createElement('td');
+        rareCell.textContent = row.rare ? 'yes' : '';
+
+        const statusCell = document.createElement('td');
+        statusCell.textContent = formatStatusMap(row.status_count);
+
+        const firstCell = document.createElement('td');
+        firstCell.textContent = formatTs(row.first_seen);
+
+        const lastCell = document.createElement('td');
+        lastCell.textContent = formatTs(row.last_seen);
+
+        tr.appendChild(methodCell);
+        tr.appendChild(hostCell);
+        tr.appendChild(pathCell);
+        tr.appendChild(countCell);
+        tr.appendChild(nonStdCell);
+        tr.appendChild(entropyCell);
+        tr.appendChild(rareCell);
+        tr.appendChild(statusCell);
+        tr.appendChild(firstCell);
+        tr.appendChild(lastCell);
+
+        tbody.appendChild(tr);
+    }
+}
+
+async function initEndpointAnomalyTable() {
+    const table = document.getElementById('endpointAnomalyTable');
+    if (!table) {
+        return;
+    }
+
+    let rows;
+    try {
+        rows = await fetchEndpointAnomalies(100);
+    } catch (err) {
+        console.error(err);
+        return;
+    }
+
+    renderEndpointAnomalyTable(rows);
+}
+
+
 
 //
 // ---- Public entrypoint the rest of the app calls ----
@@ -512,4 +628,5 @@ export async function initAnalysisUI() {
     await initRouteLatencyTable();
     await initClientErrorTable();
     await initRouteSizeTable();
+    await initEndpointAnomalyTable();
 }

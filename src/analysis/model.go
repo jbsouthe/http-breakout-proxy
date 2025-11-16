@@ -143,32 +143,6 @@ func (c *ClientFingerprintAnalyzer) OnRequest(ev *ObservedRequest) {
 }
 
 //
-// 7. Method–path density mapping / anomaly detection
-//
-
-// EndpointUsage holds statistics for a particular (method, path).
-type EndpointUsage struct {
-	Count       int64
-	LastSeen    time.Time
-	StatusCount map[int]int64 // status code -> count
-}
-
-// MethodPathAnalyzer maps Method -> Path -> EndpointUsage.
-type MethodPathAnalyzer struct {
-	ByMethodPath map[string]map[string]*EndpointUsage
-}
-
-func NewMethodPathAnalyzer() *MethodPathAnalyzer {
-	return &MethodPathAnalyzer{
-		ByMethodPath: make(map[string]map[string]*EndpointUsage),
-	}
-}
-
-func (m *MethodPathAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Update per-method, per-path usage.
-}
-
-//
 // 8. Auth / cookie header stability
 //
 

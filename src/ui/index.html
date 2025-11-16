@@ -193,6 +193,27 @@
                 </tbody>
             </table>
 
+            <h2>Endpoint Anomalies (Method / Path)</h2>
+            <table id="endpointAnomalyTable" class="table">
+                <thead>
+                <tr>
+                    <th>Method</th>
+                    <th>Host</th>
+                    <th>Path</th>
+                    <th>Count</th>
+                    <th>Non-standard method</th>
+                    <th>High-entropy path</th>
+                    <th>Rare</th>
+                    <th>Status codes</th>
+                    <th>First seen</th>
+                    <th>Last seen</th>
+                </tr>
+                </thead>
+                <tbody>
+                <!-- filled by analysis.js -->
+                </tbody>
+            </table>
+
         </div>
         <div id="tab-request" class="tab-pane" style="display:none">
             <pre id="req-body"></pre>
