@@ -79,15 +79,6 @@ func parseHostPort(addr string) string {
 	return host
 }
 
-// toHTTPHeader converts your map[string][]string into http.Header.
-func toHTTPHeader(m map[string][]string) http.Header {
-	h := make(http.Header, len(m))
-	for k, v := range m {
-		h[k] = append([]string(nil), v...)
-	}
-	return h
-}
-
 // estimateBodyBytes tries Content-Length first, then falls back to len(bodyStr).
 func estimateBodyBytes(headers map[string][]string, bodyStr string) int64 {
 	if headers != nil {
@@ -189,91 +180,6 @@ func emitAnalysis(ctx *goproxy.ProxyCtx, resp *http.Response, cap Capture) {
 	}
 
 	analysisRegistry.OnRequest(ev)
-}
-
-// observedFromCapture reconstructs an ObservedRequest from a stored Capture.
-// Because this runs at startup from disk, some fields (TLSState, client IP)
-// will be unavailable or zero-valued.
-func observedFromCapture(c Capture) *analysis.ObservedRequest {
-	if c.URL == "" {
-		return nil
-	}
-
-	u, err := url.Parse(c.URL)
-	if err != nil {
-		// Corrupt or legacy capture; skip for analysis purposes.
-		return nil
-	}
-
-	// Reconstruct latency from stored fields.
-	var latency time.Duration
-	switch {
-	case c.TotalMs > 0:
-		latency = time.Duration(c.TotalMs) * time.Millisecond
-	case c.DurationMs > 0:
-		latency = time.Duration(c.DurationMs) * time.Millisecond
-	}
-
-	// Convert header maps into http.Header for analyzers.
-	reqHdr := toHTTPHeader(c.RequestHeaders)
-	respHdr := toHTTPHeader(c.ResponseHeaders)
-
-	// Estimate payload sizes based on headers/body string.
-	reqBytes := estimateBodyBytes(c.RequestHeaders, c.RequestBodyBase64)
-	respBytes := estimateBodyBytes(c.ResponseHeaders, c.ResponseBodyBase64)
-
-	// We do not currently persist client information in Capture, so this
-	// is intentionally blank. New live traffic will populate real ClientIDs.
-	client := analysis.ClientID{}
-
-	route := analysis.RouteKey{
-		Host:   u.Host,
-		Path:   u.Path,
-		Method: c.Method,
-	}
-
-	ev := &analysis.ObservedRequest{
-		ID:         strconv.FormatInt(c.ID, 10),
-		Timestamp:  c.Time,
-		Client:     client,
-		Route:      route,
-		Latency:    latency,
-		StatusCode: c.ResponseStatus,
-		Outcome:    classifyOutcome(c.ResponseStatus),
-
-		Method: c.Method,
-		Proto:  "", // add Proto to Capture if you need it
-		Path:   u.Path,
-		Query:  u.RawQuery,
-
-		ReqBytes:  reqBytes,
-		RespBytes: respBytes,
-
-		ReqHeaders:  reqHdr,
-		RespHeaders: respHdr,
-
-		TLSState: nil, // not persisted
-		LocalIP:  nil, // not persisted
-		RemoteIP: net.ParseIP(parseHostPort(c.ServerAddr)),
-
-		TransportErr: nil,
-	}
-
-	return ev
-}
-
-// RebuildAnalysisFromCaptures replays historical captures through the analyzers.
-func RebuildAnalysisFromCaptures(reg *analysis.Registry, captures []Capture) {
-	if reg == nil {
-		return
-	}
-	for _, c := range captures {
-		ev := observedFromCapture(c)
-		if ev == nil {
-			continue
-		}
-		reg.OnRequest(ev)
-	}
 }
 
 type grpcAgg struct {
