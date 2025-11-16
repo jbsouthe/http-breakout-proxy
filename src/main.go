@@ -1,6 +1,7 @@
 package main
 
 import (
+	"HTTPBreakoutBox/src/analysis"
 	"flag"
 	"log"
 	"net/http"
@@ -50,18 +51,7 @@ func main() {
 			*listen, *mitm, *caDir, *persist, *maxBody, *bufferSize, *verbose)
 	}
 
-	// Apply runtime-configurable constants (if you prefer to keep package-level consts, you can copy/assign)
-	// Replace the package consts with local vars where needed. Example:
-	// Note: here we update the globals used elsewhere by assigning.
-	// If you want to avoid globals, refactor code to accept these parameters.
-	// Update globals (one-off):
-	// maxStoredBody = *maxBody         // cannot assign to const; make variable if needed
-	// maxStoredEntries = *bufferSize   // same as above
-
-	// If you want to change buffer sizes dynamically, change your package-level consts to vars:
-	// var maxStoredBody = 1 << 20
-	// var maxStoredEntries = 1000
-	// then here: maxStoredBody = *maxBody; maxStoredEntries = *bufferSize
+	maxStoredBody = *maxBody
 
 	paused.Store(false)
 
@@ -70,6 +60,8 @@ func main() {
 	rules := &ruleStore{}
 	broker := newSseBroker()
 	searches := newSearchStore(100)
+	analRegistry := analysis.NewDefaultRegistry()
+	SetAnalysisRegistry(analRegistry)
 
 	// Persistence
 	persistPath := *persist
@@ -82,6 +74,8 @@ func main() {
 			}
 			// populate rules
 			rules.replace(crs)
+			// build analysis registry from persisted captures
+			RebuildAnalysisFromCaptures(analRegistry, caps)
 		} else if !os.IsNotExist(err) {
 			log.Printf("Warning: failed to load %s: %v", persistPath, err)
 		} else if os.IsNotExist(err) {
