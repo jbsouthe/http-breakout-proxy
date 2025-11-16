@@ -30,10 +30,53 @@ type Capture struct {
 	RespReadMs int64 `json:"resp_read_ms,omitempty"` // body read duration (first->last byte)
 	TotalMs    int64 `json:"total_ms,omitempty"`     // wall clock: RoundTrip start -> last byte
 
-	// Connection / protocol
+	// Connection / protocol (origin side)
 	ServerAddr string `json:"server_addr,omitempty"` // ip:port of origin
 	ReusedConn bool   `json:"reused_conn,omitempty"`
 	HTTP2      bool   `json:"h2,omitempty"` // negotiated h2
+
+	// --- client identity (for per-client analysis) ---
+
+	ClientIP      string `json:"client_ip,omitempty"`       // parsed from req.RemoteAddr
+	ClientPort    string `json:"client_port,omitempty"`     // parsed from req.RemoteAddr
+	XForwardedFor string `json:"x_forwarded_for,omitempty"` // raw X-Forwarded-For
+	UserAgent     string `json:"user_agent,omitempty"`      // User-Agent header
+
+	// --- HTTP protocol / scheme metadata ---
+
+	Proto  string `json:"proto,omitempty"`  // e.g. "HTTP/1.1", "HTTP/2.0"
+	Scheme string `json:"scheme,omitempty"` // "http" or "https"`
+	IsGRPC bool   `json:"is_grpc,omitempty"`
+
+	// --- TLS fingerprint summary (client<->proxy or proxy<->origin, whichever you choose) ---
+
+	TLSVersion     uint16 `json:"tls_version,omitempty"`      // tls.ConnectionState.Version
+	TLSCipherSuite uint16 `json:"tls_cipher_suite,omitempty"` // tls.ConnectionState.CipherSuite
+	TLSALPN        string `json:"tls_alpn,omitempty"`         // NegotiatedProtocol
+	TLSServerName  string `json:"tls_server_name,omitempty"`  // SNI
+	TLSResumed     bool   `json:"tls_resumed,omitempty"`      // DidResume
+
+	// --- size accounting (for bandwidth and payload stats) ---
+
+	// Logical body sizes (decoded, before base64 encoding).
+	RequestBodyBytes  int64 `json:"request_body_bytes,omitempty"`
+	ResponseBodyBytes int64 `json:"response_body_bytes,omitempty"`
+
+	// Optional: approximate “on-the-wire” totals if you compute them.
+	RequestBytesTotal  int64 `json:"request_bytes_total,omitempty"`
+	ResponseBytesTotal int64 `json:"response_bytes_total,omitempty"`
+
+	// --- auth / cookie structure (optional, but useful for stability analysis) ---
+
+	AuthHeaderPresent bool     `json:"auth_header_present,omitempty"`
+	AuthHeaderLength  int      `json:"auth_header_length,omitempty"`
+	CookieKeys        []string `json:"cookie_keys,omitempty"` // cookie key names only
+
+	// --- body sampling metadata (for entropy / preview) ---
+
+	ReqBodyTruncated  bool  `json:"req_body_truncated,omitempty"`
+	RespBodyTruncated bool  `json:"resp_body_truncated,omitempty"`
+	BodySampleLimit   int64 `json:"body_sample_limit,omitempty"`
 
 	// GRPC specific
 	GRPC *GRPCSample `json:"grpc,omitempty"`
