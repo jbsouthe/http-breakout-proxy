@@ -1,5 +1,6 @@
 package main
 
+import "C"
 import (
 	"bufio"
 	"bytes"
@@ -20,26 +21,260 @@ import (
 	"io/ioutil"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"HTTPBreakoutBox/src/analysis"
+
 	"github.com/elazarl/goproxy"
 	"golang.org/x/net/http2"
 )
-
-const maxGRPCSample = 256 << 10 // 256 KiB across frames
 
 const (
 	maxGRPCSampleBytes      = 256 << 10 // 256 KiB across frames (per direction)
 	maxGRPCFramesPerSide    = 4         // first N frames request/response
 	maxBytesPerFramePreview = 64 << 10  // bound decoded payload kept per frame
 )
+
+var analysisRegistry *analysis.Registry
+
+func SetAnalysisRegistry(r *analysis.Registry) {
+	analysisRegistry = r
+}
+
+// classifyOutcome maps HTTP status codes into coarse-grained outcomes.
+func classifyOutcome(status int) analysis.Outcome {
+	switch {
+	case status >= 200 && status < 300:
+		return analysis.Outcome2xx
+	case status >= 300 && status < 400:
+		return analysis.Outcome3xx
+	case status >= 400 && status < 500:
+		return analysis.Outcome4xx
+	case status >= 500 && status < 600:
+		return analysis.Outcome5xx
+	default:
+		return analysis.OutcomeOther
+	}
+}
+
+// parseHostPort extracts the host part from "host:port" strings.
+func parseHostPort(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Not in host:port form; return as-is.
+		return addr
+	}
+	return host
+}
+
+// toHTTPHeader converts your map[string][]string into http.Header.
+func toHTTPHeader(m map[string][]string) http.Header {
+	h := make(http.Header, len(m))
+	for k, v := range m {
+		h[k] = append([]string(nil), v...)
+	}
+	return h
+}
+
+// estimateBodyBytes tries Content-Length first, then falls back to len(bodyStr).
+func estimateBodyBytes(headers map[string][]string, bodyStr string) int64 {
+	if headers != nil {
+		if vals, ok := headers["Content-Length"]; ok && len(vals) > 0 {
+			if n, err := strconv.ParseInt(vals[0], 10, 64); err == nil {
+				return n
+			}
+		}
+	}
+	// This is an approximation; for analysis it is better than nothing.
+	return int64(len(bodyStr))
+}
+
+// buildClientID derives a stable ClientID from the incoming request.
+func buildClientID(r *http.Request) analysis.ClientID {
+	ip := parseHostPort(r.RemoteAddr)
+	ua := r.Header.Get("User-Agent")
+	// Prefer X-Forwarded-For as a hint when present.
+	xff := r.Header.Get("X-Forwarded-For")
+	return analysis.ClientID{
+		IP:         ip,
+		UserAgent:  ua,
+		ClientHint: xff,
+	}
+}
+
+// buildRouteKey normalizes the route identity.
+func buildRouteKey(r *http.Request) analysis.RouteKey {
+	host := r.Host
+	if host == "" && r.URL != nil {
+		host = r.URL.Host
+	}
+	path := ""
+	if r.URL != nil {
+		path = r.URL.Path
+	}
+	return analysis.RouteKey{
+		Host:   host,
+		Path:   path,
+		Method: r.Method,
+	}
+}
+
+// emitAnalysis converts the final Capture + response into an ObservedRequest and
+// dispatches it into the analysis registry.
+func emitAnalysis(ctx *goproxy.ProxyCtx, resp *http.Response, cap Capture) {
+	if analysisRegistry == nil || ctx == nil || ctx.Req == nil || resp == nil {
+		return
+	}
+
+	r := ctx.Req
+	u := r.URL
+	if u == nil {
+		return
+	}
+
+	// Derive latency from your capture struct.
+	// Prefer TotalMs if available, otherwise fall back to DurationMs.
+	var latency time.Duration
+	if cap.TotalMs > 0 {
+		latency = time.Duration(cap.TotalMs) * time.Millisecond
+	} else if cap.DurationMs > 0 {
+		latency = time.Duration(cap.DurationMs) * time.Millisecond
+	}
+
+	// Estimate payload sizes.
+	reqBytes := estimateBodyBytes(cap.RequestHeaders, cap.RequestBodyBase64)
+	respBytes := estimateBodyBytes(cap.ResponseHeaders, cap.ResponseBodyBase64)
+
+	ev := &analysis.ObservedRequest{
+		ID:         strconv.FormatInt(cap.ID, 10), // if Capture does not have ID, you can omit this or set to cap.Name.
+		Timestamp:  cap.Time,
+		Client:     buildClientID(r),
+		Route:      buildRouteKey(r),
+		Latency:    latency,
+		StatusCode: resp.StatusCode,
+		Outcome:    classifyOutcome(resp.StatusCode),
+
+		Method: r.Method,
+		Proto:  r.Proto,
+		Path:   u.Path,
+		Query:  u.RawQuery,
+
+		ReqBytes:  reqBytes,
+		RespBytes: respBytes,
+
+		ReqHeaders:  toHTTPHeader(cap.RequestHeaders),
+		RespHeaders: toHTTPHeader(cap.ResponseHeaders),
+
+		TLSState: resp.Request.TLS,
+
+		// For now we treat the upstream server as "remote".
+		RemoteIP: net.ParseIP(parseHostPort(cap.ServerAddr)),
+		// LocalIP is not trivially available here; leave zero-valued or
+		// extend your phases struct to capture it via httptrace if desired.
+		LocalIP: nil,
+
+		TransportErr: nil, // you can thread actual transport errors into Capture if you want.
+	}
+
+	analysisRegistry.OnRequest(ev)
+}
+
+// observedFromCapture reconstructs an ObservedRequest from a stored Capture.
+// Because this runs at startup from disk, some fields (TLSState, client IP)
+// will be unavailable or zero-valued.
+func observedFromCapture(c Capture) *analysis.ObservedRequest {
+	if c.URL == "" {
+		return nil
+	}
+
+	u, err := url.Parse(c.URL)
+	if err != nil {
+		// Corrupt or legacy capture; skip for analysis purposes.
+		return nil
+	}
+
+	// Reconstruct latency from stored fields.
+	var latency time.Duration
+	switch {
+	case c.TotalMs > 0:
+		latency = time.Duration(c.TotalMs) * time.Millisecond
+	case c.DurationMs > 0:
+		latency = time.Duration(c.DurationMs) * time.Millisecond
+	}
+
+	// Convert header maps into http.Header for analyzers.
+	reqHdr := toHTTPHeader(c.RequestHeaders)
+	respHdr := toHTTPHeader(c.ResponseHeaders)
+
+	// Estimate payload sizes based on headers/body string.
+	reqBytes := estimateBodyBytes(c.RequestHeaders, c.RequestBodyBase64)
+	respBytes := estimateBodyBytes(c.ResponseHeaders, c.ResponseBodyBase64)
+
+	// We do not currently persist client information in Capture, so this
+	// is intentionally blank. New live traffic will populate real ClientIDs.
+	client := analysis.ClientID{}
+
+	route := analysis.RouteKey{
+		Host:   u.Host,
+		Path:   u.Path,
+		Method: c.Method,
+	}
+
+	ev := &analysis.ObservedRequest{
+		ID:         strconv.FormatInt(c.ID, 10),
+		Timestamp:  c.Time,
+		Client:     client,
+		Route:      route,
+		Latency:    latency,
+		StatusCode: c.ResponseStatus,
+		Outcome:    classifyOutcome(c.ResponseStatus),
+
+		Method: c.Method,
+		Proto:  "", // add Proto to Capture if you need it
+		Path:   u.Path,
+		Query:  u.RawQuery,
+
+		ReqBytes:  reqBytes,
+		RespBytes: respBytes,
+
+		ReqHeaders:  reqHdr,
+		RespHeaders: respHdr,
+
+		TLSState: nil, // not persisted
+		LocalIP:  nil, // not persisted
+		RemoteIP: net.ParseIP(parseHostPort(c.ServerAddr)),
+
+		TransportErr: nil,
+	}
+
+	return ev
+}
+
+// RebuildAnalysisFromCaptures replays historical captures through the analyzers.
+func RebuildAnalysisFromCaptures(reg *analysis.Registry, captures []Capture) {
+	if reg == nil {
+		return
+	}
+	for _, c := range captures {
+		ev := observedFromCapture(c)
+		if ev == nil {
+			continue
+		}
+		reg.OnRequest(ev)
+	}
+}
 
 type grpcAgg struct {
 	ServiceMethod string
@@ -53,6 +288,233 @@ type grpcAgg struct {
 }
 
 var grpcAggMap sync.Map // key(reqKey) -> *grpcAgg
+
+func extractCookieKeys(h http.Header) []string {
+	ck := h.Values("Cookie")
+	if len(ck) == 0 {
+		return nil
+	}
+
+	keySet := make(map[string]struct{})
+
+	for _, raw := range ck {
+		parts := strings.Split(raw, ";")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if eq := strings.Index(p, "="); eq > 0 {
+				key := p[:eq]
+				keySet[key] = struct{}{}
+			}
+		}
+	}
+
+	out := make([]string, 0, len(keySet))
+	for k := range keySet {
+		out = append(out, k)
+	}
+	return out
+}
+
+func startCapture(r *http.Request, start time.Time) Capture {
+	key := reqKey(r)
+	reqHeaders := make(map[string][]string, len(r.Header))
+	for k, v := range r.Header {
+		reqHeaders[k] = append([]string(nil), v...)
+	}
+	encoding := r.Header.Get("Content-Encoding")
+	bodyStr := ""
+	// For binary streaming, avoid dumping raw bytes in Capture.RequestBodyBase64.
+	if isGRPC(r) {
+		bodyStr = "<grpc-request stream>"
+		if r.Body != nil {
+			pass, mirror := teeBody(r.Body)
+			r.Body = pass
+
+			agg := &grpcAgg{
+				ServiceMethod: r.URL.EscapedPath(),
+				Encoding:      grpcEncoding(r.Header),
+			}
+			grpcAggMap.Store(key, agg)
+
+			go func(k string, hdr http.Header, mr io.Reader) {
+				enc := grpcEncoding(hdr)
+				frames, _, _ := parseGRPCFrames(mr, maxGRPCSampleBytes, enc)
+				if v, ok := grpcAggMap.Load(k); ok {
+					ga := v.(*grpcAgg)
+					for _, f := range frames {
+						if len(ga.Req) >= maxGRPCFramesPerSide {
+							break
+						}
+						ga.reqBytes += len(f.Payload)
+						ga.Req = append(ga.Req, makeFrameSample(f.Compressed, f.Payload))
+					}
+				}
+			}(key, r.Header.Clone(), mirror)
+		}
+	} else {
+		bodyStrRaw, newBody, err := readLimitedBody(r.Body, maxStoredBody, encoding)
+		if err != nil {
+			log.Printf("error reading request body: %v", err)
+			bodyStr = "--body-read-error--"
+			newBody = io.NopCloser(bytes.NewReader(nil))
+		}
+		bodyStr = bodyStrRaw
+		r.Body = newBody
+	}
+	clientIP, clientPort, _ := net.SplitHostPort(r.RemoteAddr)
+	c := Capture{
+		Time:              time.Now().UTC(),
+		Method:            r.Method,
+		URL:               r.URL.String(),
+		RequestHeaders:    reqHeaders,
+		RequestBodyBase64: bodyStr,
+		RequestBodyBytes:  int64(len(bodyStr)),
+		Notes:             fmt.Sprintf("pending (captured at %s)", start.Format(time.RFC3339)),
+		ClientIP:          clientIP,
+		ClientPort:        clientPort,
+		XForwardedFor:     r.Header.Get("X-Forwarded-For"),
+		UserAgent:         r.UserAgent(),
+		Proto:             r.Proto,
+		Scheme:            r.URL.Scheme,
+	}
+	if len(bodyStr) > maxStoredBody {
+		c.ReqBodyTruncated = true
+	}
+	c.BodySampleLimit = int64(maxStoredBody)
+	if r.TLS != nil {
+		tls := r.TLS
+		c.TLSVersion = tls.Version
+		c.TLSCipherSuite = tls.CipherSuite
+		c.TLSALPN = tls.NegotiatedProtocol
+		c.TLSServerName = tls.ServerName
+		c.TLSResumed = tls.DidResume
+	}
+	auth := r.Header.Get("Authorization")
+	if auth != "" {
+		c.AuthHeaderPresent = true
+		c.AuthHeaderLength = len(auth)
+	}
+	c.CookieKeys = extractCookieKeys(r.Header)
+	return c
+}
+
+func finishCapture(c *Capture, resp http.Response, ctx *goproxy.ProxyCtx) Capture {
+	key := reqKey(resp.Request)
+	encoding := resp.Header.Get("Content-Encoding")
+	rh := make(map[string][]string, len(resp.Header))
+	for k, v := range resp.Header {
+		rh[k] = append([]string(nil), v...)
+	}
+
+	var durationMs int64
+	if st, ok := ctx.UserData.(time.Time); ok {
+		durationMs = time.Since(st).Milliseconds()
+	}
+	if c.Name == "" {
+		c.Name = fmt.Sprintf("%s %s [%d]", c.Method, c.URL, resp.StatusCode)
+	}
+	c.ResponseStatus = resp.StatusCode
+	c.ResponseHeaders = rh
+	c.DurationMs = durationMs
+	c.Notes = "" // no longer overloading Notes
+
+	if isGRPC(resp.Request) {
+		if resp.Body != nil {
+			pass, mirror := teeBody(resp.Body)
+			resp.Body = pass
+			c.RequestBodyBytes = int64(resp.ContentLength)
+			if resp.ContentLength > maxGRPCSampleBytes {
+				c.RespBodyTruncated = true
+			}
+
+			go func(k string, h http.Header, tr *http.Header, mr io.Reader) {
+				frames, _, _ := parseGRPCFrames(mr, maxGRPCSampleBytes, grpcEncoding(h))
+				var st, msg string
+				if tr != nil {
+					st = tr.Get("grpc-status")
+					umsg, _ := url.QueryUnescape(tr.Get("grpc-message"))
+					msg = umsg
+				}
+				if v, ok := grpcAggMap.Load(k); ok {
+					ga := v.(*grpcAgg)
+					for _, f := range frames {
+						if len(ga.Resp) >= maxGRPCFramesPerSide {
+							break
+						}
+						ga.respBytes += len(f.Payload)
+						ga.Resp = append(ga.Resp, makeFrameSample(f.Compressed, f.Payload))
+					}
+					if st != "" {
+						ga.TrailerStatus = st
+						ga.TrailerMsg = msg
+					}
+				}
+			}(key, resp.Header.Clone(), &resp.Trailer, mirror)
+		}
+		c.ResponseBodyBase64 = "<grpc-response stream>"
+		// Merge aggregated gRPC into Capture
+		if v, ok := grpcAggMap.Load(key); ok {
+			ga := v.(*grpcAgg)
+			c.GRPC = &GRPCSample{
+				ServiceMethod: ga.ServiceMethod,
+				Encoding:      ga.Encoding,
+				ReqFrames:     ga.Req,
+				RespFrames:    ga.Resp,
+				TrailerStatus: ga.TrailerStatus,
+				TrailerMsg:    ga.TrailerMsg,
+			}
+			grpcAggMap.Delete(key)
+		} else {
+			// Fallback: minimally mark as gRPC
+			c.GRPC = &GRPCSample{
+				ServiceMethod: ctx.Req.URL.EscapedPath(),
+				Encoding:      grpcEncoding(resp.Header),
+			}
+		}
+	} else {
+		respBodyStr, newRespBody, err := readLimitedBody(resp.Body, maxStoredBody, strings.ToLower(encoding))
+		if err != nil {
+			respBodyStr = "--resp-body-read-error--"
+			newRespBody = io.NopCloser(bytes.NewReader(nil))
+		}
+		resp.Body = newRespBody
+		c.ResponseBodyBase64 = respBodyStr
+		c.ResponseBodyBytes = int64(len(respBodyStr))
+	}
+
+	// timings you already compute (keep your existing phase merge here)
+	if v, ok := phaseMap.Load(key); ok {
+		p := v.(*phases)
+		if p.done.IsZero() {
+			p.done = time.Now()
+		}
+		c.DNSMs = millis(p.dnsStart, p.dnsEnd)
+		c.ConnectMs = millis(p.conStart, p.conEnd)
+		c.TLSMs = millis(p.tlsStart, p.tlsEnd)
+		c.TTFBMs = millis(p.wroteReq, p.firstByte)
+		c.RespReadMs = millis(p.firstByte, p.done)
+		c.TotalMs = millis(p.startRT, p.done)
+		c.ServerAddr = p.serverAddr
+		c.ReusedConn = p.reused
+		if resp.Request != nil && resp.Request.TLS != nil {
+			c.HTTP2 = (resp.Request.TLS.NegotiatedProtocol == "h2")
+		} else {
+			c.HTTP2 = p.h2
+		}
+		phaseMap.Delete(key)
+	}
+
+	if resp.Request != nil && resp.Request.TLS != nil {
+		cs := resp.Request.TLS
+		c.TLSVersion = cs.Version
+		c.TLSCipherSuite = cs.CipherSuite
+		c.TLSALPN = cs.NegotiatedProtocol
+		c.TLSServerName = cs.ServerName
+		c.TLSResumed = cs.DidResume
+	}
+
+	return *c
+}
 
 // buildProxyHandler configures and returns the proxy handler.
 func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker, caDur string) http.Handler {
@@ -112,69 +574,7 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 			GotFirstResponseByte: func() { p.firstByte = time.Now() },
 		}
 
-		reqHeaders := make(map[string][]string, len(r.Header))
-		for k, v := range r.Header {
-			reqHeaders[k] = append([]string(nil), v...)
-		}
-		encoding := r.Header.Get("Content-Encoding")
-		if isGRPC(r) {
-			if r.Body != nil {
-				pass, mirror := teeBody(r.Body)
-				r.Body = pass
-
-				agg := &grpcAgg{
-					ServiceMethod: r.URL.EscapedPath(),
-					Encoding:      grpcEncoding(r.Header),
-				}
-				grpcAggMap.Store(key, agg)
-
-				go func(k string, hdr http.Header, mr io.Reader) {
-					enc := grpcEncoding(hdr)
-					frames, _, _ := parseGRPCFrames(mr, maxGRPCSampleBytes, enc)
-					if v, ok := grpcAggMap.Load(k); ok {
-						ga := v.(*grpcAgg)
-						for _, f := range frames {
-							if len(ga.Req) >= maxGRPCFramesPerSide {
-								break
-							}
-							ga.reqBytes += len(f.Payload)
-							ga.Req = append(ga.Req, makeFrameSample(f.Compressed, f.Payload))
-						}
-					}
-				}(key, r.Header.Clone(), mirror)
-			}
-
-			// For binary streaming, avoid dumping raw bytes in Capture.RequestBodyBase64.
-			bodyStr := "<grpc-request stream>"
-			c := Capture{
-				Time:              time.Now().UTC(),
-				Method:            r.Method,
-				URL:               r.URL.String(),
-				RequestHeaders:    reqHeaders,
-				RequestBodyBase64: bodyStr,
-				Notes:             fmt.Sprintf("pending (captured at %s)", start.Format(time.RFC3339)),
-			}
-			ctx.UserData = start
-			reqMap.Store(key, c)
-			r = r.WithContext(httptrace.WithClientTrace(r.Context(), ct))
-			return r, nil
-		}
-		bodyStr, newBody, err := readLimitedBody(r.Body, maxStoredBody, encoding)
-		if err != nil {
-			log.Printf("error reading request body: %v", err)
-			bodyStr = "--body-read-error--"
-			newBody = io.NopCloser(bytes.NewReader(nil))
-		}
-		r.Body = newBody
-
-		c := Capture{
-			Time:              time.Now().UTC(),
-			Method:            r.Method,
-			URL:               r.URL.String(),
-			RequestHeaders:    reqHeaders,
-			RequestBodyBase64: bodyStr,
-			Notes:             fmt.Sprintf("pending (captured at %s)", start.Format(time.RFC3339)),
-		}
+		c := startCapture(r, start)
 
 		ctx.UserData = start
 		reqMap.Store(key, c)
@@ -194,153 +594,10 @@ func buildProxyHandler(mitmEnabled bool, store *captureStore, broker *sseBroker,
 		}
 		partial := val.(Capture)
 
-		if v, ok := phaseMap.Load(key); ok {
-			p := v.(*phases)
-			if p.done.IsZero() {
-				p.done = time.Now()
-			}
+		finishCapture(&partial, *resp, ctx)
 
-			partial.DNSMs = millis(p.dnsStart, p.dnsEnd)
-			partial.ConnectMs = millis(p.conStart, p.conEnd)
-			partial.TLSMs = millis(p.tlsStart, p.tlsEnd)
-			partial.TTFBMs = millis(p.wroteReq, p.firstByte)
-			partial.RespReadMs = millis(p.firstByte, p.done)
-			partial.TotalMs = millis(p.startRT, p.done)
-			partial.ServerAddr = p.serverAddr
-			partial.ReusedConn = p.reused
-			if resp.Request != nil && resp.Request.TLS != nil {
-				partial.HTTP2 = (resp.Request.TLS.NegotiatedProtocol == "h2")
-			} else {
-				partial.HTTP2 = p.h2
-			}
-			phaseMap.Delete(key)
-		}
-
-		encoding := resp.Header.Get("Content-Encoding")
-		if isGRPC(ctx.Req) {
-			if resp.Body != nil {
-				pass, mirror := teeBody(resp.Body)
-				resp.Body = pass
-
-				go func(k string, h http.Header, tr *http.Header, mr io.Reader) {
-					frames, _, _ := parseGRPCFrames(mr, maxGRPCSampleBytes, grpcEncoding(h))
-					var st, msg string
-					if tr != nil {
-						st = tr.Get("grpc-status")
-						umsg, _ := url.QueryUnescape(tr.Get("grpc-message"))
-						msg = umsg
-					}
-					if v, ok := grpcAggMap.Load(k); ok {
-						ga := v.(*grpcAgg)
-						for _, f := range frames {
-							if len(ga.Resp) >= maxGRPCFramesPerSide {
-								break
-							}
-							ga.respBytes += len(f.Payload)
-							ga.Resp = append(ga.Resp, makeFrameSample(f.Compressed, f.Payload))
-						}
-						if st != "" {
-							ga.TrailerStatus = st
-							ga.TrailerMsg = msg
-						}
-					}
-				}(key, resp.Header.Clone(), &resp.Trailer, mirror)
-			}
-
-			// Copy response headers now; we’ll finalize GRPC field below.
-			rh := make(map[string][]string, len(resp.Header))
-			for k, v := range resp.Header {
-				rh[k] = append([]string(nil), v...)
-			}
-
-			var durationMs int64
-			if st, ok := ctx.UserData.(time.Time); ok {
-				durationMs = time.Since(st).Milliseconds()
-			}
-
-			if partial.Name == "" {
-				partial.Name = fmt.Sprintf("%s %s [%d]", partial.Method, partial.URL, resp.StatusCode)
-			}
-			partial.ResponseStatus = resp.StatusCode
-			partial.ResponseHeaders = rh
-			partial.ResponseBodyBase64 = "<grpc-response stream>"
-			partial.DurationMs = durationMs
-			partial.Notes = "" // no longer overloading Notes
-
-			// Merge aggregated gRPC into Capture
-			if v, ok := grpcAggMap.Load(key); ok {
-				ga := v.(*grpcAgg)
-				partial.GRPC = &GRPCSample{
-					ServiceMethod: ga.ServiceMethod,
-					Encoding:      ga.Encoding,
-					ReqFrames:     ga.Req,
-					RespFrames:    ga.Resp,
-					TrailerStatus: ga.TrailerStatus,
-					TrailerMsg:    ga.TrailerMsg,
-				}
-				grpcAggMap.Delete(key)
-			} else {
-				// Fallback: minimally mark as gRPC
-				partial.GRPC = &GRPCSample{
-					ServiceMethod: ctx.Req.URL.EscapedPath(),
-					Encoding:      grpcEncoding(resp.Header),
-				}
-			}
-
-			// timings you already compute (keep your existing phase merge here)
-			if v, ok := phaseMap.Load(key); ok {
-				p := v.(*phases)
-				if p.done.IsZero() {
-					p.done = time.Now()
-				}
-				partial.DNSMs = millis(p.dnsStart, p.dnsEnd)
-				partial.ConnectMs = millis(p.conStart, p.conEnd)
-				partial.TLSMs = millis(p.tlsStart, p.tlsEnd)
-				partial.TTFBMs = millis(p.wroteReq, p.firstByte)
-				partial.RespReadMs = millis(p.firstByte, p.done)
-				partial.TotalMs = millis(p.startRT, p.done)
-				partial.ServerAddr = p.serverAddr
-				partial.ReusedConn = p.reused
-				if resp.Request != nil && resp.Request.TLS != nil {
-					partial.HTTP2 = (resp.Request.TLS.NegotiatedProtocol == "h2")
-				} else {
-					partial.HTTP2 = p.h2
-				}
-				phaseMap.Delete(key)
-			}
-
-			stored := store.add(partial)
-			broker.publish(stored)
-			reqMap.Delete(key)
-
-			log.Printf("Response '%s' Status %s [gRPC %s]", resp.Request.URL.String(), resp.Status, partial.GRPC.ServiceMethod)
-			return resp
-		}
-		respBodyStr, newRespBody, err := readLimitedBody(resp.Body, maxStoredBody, strings.ToLower(encoding))
-		if err != nil {
-			respBodyStr = "--resp-body-read-error--"
-			newRespBody = io.NopCloser(bytes.NewReader(nil))
-		}
-		resp.Body = newRespBody
-
-		rh := make(map[string][]string, len(resp.Header))
-		for k, v := range resp.Header {
-			rh[k] = append([]string(nil), v...)
-		}
-
-		var durationMs int64
-		if st, ok := ctx.UserData.(time.Time); ok {
-			durationMs = time.Since(st).Milliseconds()
-		}
-
-		if partial.Name == "" {
-			partial.Name = fmt.Sprintf("%s %s [%d]", partial.Method, partial.URL, resp.StatusCode)
-		}
-		partial.ResponseStatus = resp.StatusCode
-		partial.ResponseHeaders = rh
-		partial.ResponseBodyBase64 = respBodyStr
-		partial.DurationMs = durationMs
-		partial.Notes = ""
+		// Send this capture into the analysis pipeline.
+		emitAnalysis(ctx, resp, partial)
 
 		stored := store.add(partial)
 		broker.publish(stored)
