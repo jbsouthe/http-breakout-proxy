@@ -135,6 +135,8 @@ func main() {
 			handleRouteLatencyMetrics(w, r)
 		case r.URL.Path == "/metrics/errors/clients":
 			handleClientErrorMetrics(w, r)
+		case r.URL.Path == "/metrics/size/routes":
+			handleRouteSizeMetrics(w, r)
 		case r.URL.Path == "/events",
 			strings.HasPrefix(r.URL.Path, "/api/"),
 			strings.HasSuffix(r.URL.Path, ".js"),

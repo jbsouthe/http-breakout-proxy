@@ -382,6 +382,124 @@ async function initClientErrorTable() {
     renderClientErrorTable(rows);
 }
 
+async function fetchRouteSize(minCount = 10, limit = 100) {
+    const params = new URLSearchParams();
+    if (minCount > 0) params.set('min', String(minCount));
+    if (limit > 0) params.set('limit', String(limit));
+
+    const res = await fetch(`/metrics/size/routes?${params.toString()}`);
+    if (!res.ok) {
+        throw new Error('Failed to fetch route size metrics: ' + res.status);
+    }
+    return res.json();
+}
+
+function renderRouteSizeTable(rows) {
+    const table = document.getElementById('routeSizeTable');
+    if (!table) {
+        return;
+    }
+    const tbody = table.querySelector('tbody');
+    if (!tbody) {
+        return;
+    }
+
+    while (tbody.firstChild) {
+        tbody.removeChild(tbody.firstChild);
+    }
+
+    if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 14;
+        td.textContent = 'No routes with sufficient payload samples yet.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
+
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+
+        const methodCell = document.createElement('td');
+        methodCell.textContent = row.method;
+
+        const hostCell = document.createElement('td');
+        hostCell.textContent = row.host;
+
+        const pathCell = document.createElement('td');
+        pathCell.textContent = row.path;
+
+        const reqCountCell = document.createElement('td');
+        reqCountCell.textContent = String(row.req_count);
+
+        const reqMeanCell = document.createElement('td');
+        reqMeanCell.textContent = row.req_mean_bytes.toFixed(1);
+
+        const reqStdCell = document.createElement('td');
+        reqStdCell.textContent = row.req_std_bytes.toFixed(1);
+
+        const reqMinCell = document.createElement('td');
+        reqMinCell.textContent = String(row.req_min_bytes);
+
+        const reqMaxCell = document.createElement('td');
+        reqMaxCell.textContent = String(row.req_max_bytes);
+
+        const resCountCell = document.createElement('td');
+        resCountCell.textContent = String(row.res_count);
+
+        const resMeanCell = document.createElement('td');
+        resMeanCell.textContent = row.res_mean_bytes.toFixed(1);
+
+        const resStdCell = document.createElement('td');
+        resStdCell.textContent = row.res_std_bytes.toFixed(1);
+
+        const resMinCell = document.createElement('td');
+        resMinCell.textContent = String(row.res_min_bytes);
+
+        const resMaxCell = document.createElement('td');
+        resMaxCell.textContent = String(row.res_max_bytes);
+
+        const lastCell = document.createElement('td');
+        const last = row.last_updated ? new Date(row.last_updated) : null;
+        lastCell.textContent = last ? last.toLocaleString() : '';
+
+        tr.appendChild(methodCell);
+        tr.appendChild(hostCell);
+        tr.appendChild(pathCell);
+        tr.appendChild(reqCountCell);
+        tr.appendChild(reqMeanCell);
+        tr.appendChild(reqStdCell);
+        tr.appendChild(reqMinCell);
+        tr.appendChild(reqMaxCell);
+        tr.appendChild(resCountCell);
+        tr.appendChild(resMeanCell);
+        tr.appendChild(resStdCell);
+        tr.appendChild(resMinCell);
+        tr.appendChild(resMaxCell);
+        tr.appendChild(lastCell);
+
+        tbody.appendChild(tr);
+    }
+}
+
+async function initRouteSizeTable() {
+    const table = document.getElementById('routeSizeTable');
+    if (!table) {
+        return;
+    }
+
+    let rows;
+    try {
+        rows = await fetchRouteSize(10, 100);
+    } catch (err) {
+        console.error(err);
+        return;
+    }
+
+    renderRouteSizeTable(rows);
+}
+
 
 //
 // ---- Public entrypoint the rest of the app calls ----
@@ -393,4 +511,5 @@ export async function initAnalysisUI() {
     await initRetryTable();
     await initRouteLatencyTable();
     await initClientErrorTable();
+    await initRouteSizeTable();
 }

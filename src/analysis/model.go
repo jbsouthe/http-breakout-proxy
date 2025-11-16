@@ -104,41 +104,6 @@ type QuantileEstimate struct {
 }
 
 //
-// 5. Content-length / payload size profiling
-//
-
-// SizeStats tracks basic stats for payload sizes.
-type SizeStats struct {
-	Count       int64
-	TotalBytes  int64
-	Squared     float64
-	MaxBytes    int64
-	MinBytes    int64
-	LastUpdated time.Time
-}
-
-// PayloadProfile holds separate stats for request and response sizes.
-type PayloadProfile struct {
-	Req SizeStats
-	Res SizeStats
-}
-
-// SizeAnalyzer stores profiles per route.
-type SizeAnalyzer struct {
-	ByRoute map[RouteKey]*PayloadProfile
-}
-
-func NewSizeAnalyzer() *SizeAnalyzer {
-	return &SizeAnalyzer{
-		ByRoute: make(map[RouteKey]*PayloadProfile),
-	}
-}
-
-func (s *SizeAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Update request/response SizeStats for the route.
-}
-
-//
 // 6. Client fingerprint / UA drift
 //
 

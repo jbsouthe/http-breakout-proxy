@@ -462,3 +462,109 @@ func handleClientErrorMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+type routeSizeDTO struct {
+	Method string `json:"method"`
+	Host   string `json:"host"`
+	Path   string `json:"path"`
+
+	ReqCount int64   `json:"req_count"`
+	ReqMean  float64 `json:"req_mean_bytes"`
+	ReqStd   float64 `json:"req_std_bytes"`
+	ReqMin   int64   `json:"req_min_bytes"`
+	ReqMax   int64   `json:"req_max_bytes"`
+
+	ResCount int64   `json:"res_count"`
+	ResMean  float64 `json:"res_mean_bytes"`
+	ResStd   float64 `json:"res_std_bytes"`
+	ResMin   int64   `json:"res_min_bytes"`
+	ResMax   int64   `json:"res_max_bytes"`
+
+	LastUpdated time.Time `json:"last_updated"`
+}
+
+// GET /metrics/size/routes
+//
+// Query params (optional):
+//
+//	?min=<N>   -> minimum req OR res count per route (default: 10)
+//	?limit=<K> -> max number of routes to return (default: 100)
+//
+// Sorted by descending max(request mean, response mean).
+func handleRouteSizeMetrics(w http.ResponseWriter, r *http.Request) {
+	if analysisRegistry == nil {
+		http.Error(w, "analysis registry not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	sa := analysisRegistry.Size()
+	if sa == nil {
+		http.Error(w, "size analyzer not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+
+	minCount := int64(10)
+	if s := q.Get("min"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v > 0 {
+			minCount = v
+		}
+	}
+
+	limit := 100
+	if s := q.Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	snap := sa.Snapshot(minCount)
+	dtos := make([]routeSizeDTO, 0, len(snap))
+
+	for _, s := range snap {
+		dto := routeSizeDTO{
+			Method: s.Route.Method,
+			Host:   s.Route.Host,
+			Path:   s.Route.Path,
+
+			ReqCount: s.ReqCount,
+			ReqMean:  s.ReqMean,
+			ReqStd:   s.ReqStd,
+			ReqMin:   s.ReqMin,
+			ReqMax:   s.ReqMax,
+
+			ResCount: s.ResCount,
+			ResMean:  s.ResMean,
+			ResStd:   s.ResStd,
+			ResMin:   s.ResMin,
+			ResMax:   s.ResMax,
+
+			LastUpdated: s.LastUpdated,
+		}
+		dtos = append(dtos, dto)
+	}
+
+	// Sort by "largest mean payload" across request/response
+	sort.Slice(dtos, func(i, j int) bool {
+		mi := dtos[i].ReqMean
+		if dtos[i].ResMean > mi {
+			mi = dtos[i].ResMean
+		}
+		mj := dtos[j].ReqMean
+		if dtos[j].ResMean > mj {
+			mj = dtos[j].ResMean
+		}
+		return mi > mj
+	})
+
+	if len(dtos) > limit {
+		dtos = dtos[:limit]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(dtos); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
