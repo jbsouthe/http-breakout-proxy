@@ -104,45 +104,6 @@ type QuantileEstimate struct {
 }
 
 //
-// 6. Client fingerprint / UA drift
-//
-
-// TLSSignature captures a coarse TLS fingerprint.
-type TLSSignature struct {
-	Version       uint16
-	CipherSuite   uint16
-	ALPNProtocol  string
-	ServerName    string
-	Resumed       bool
-	SupportsEarly bool
-}
-
-// ClientFingerprint aggregates header ordering, UA, TLS, etc.
-type ClientFingerprint struct {
-	UserAgent     string
-	HeaderOrder   []string // ordered list of header names
-	TLSSignature  TLSSignature
-	FirstSeen     time.Time
-	LastSeen      time.Time
-	ObservationCt int64
-}
-
-// ClientFingerprintAnalyzer tracks per-client fingerprint evolution.
-type ClientFingerprintAnalyzer struct {
-	ByClient map[ClientID]*ClientFingerprint
-}
-
-func NewClientFingerprintAnalyzer() *ClientFingerprintAnalyzer {
-	return &ClientFingerprintAnalyzer{
-		ByClient: make(map[ClientID]*ClientFingerprint),
-	}
-}
-
-func (c *ClientFingerprintAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Derive fingerprint from ev and compare to previous.
-}
-
-//
 // 8. Auth / cookie header stability
 //
 

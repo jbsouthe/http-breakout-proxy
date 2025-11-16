@@ -615,6 +615,118 @@ async function initEndpointAnomalyTable() {
     renderEndpointAnomalyTable(rows);
 }
 
+async function fetchClientFingerprints(minChanges = 1, limit = 100) {
+    const params = new URLSearchParams();
+    if (minChanges >= 0) params.set('min_changes', String(minChanges));
+    if (limit > 0) params.set('limit', String(limit));
+
+    const res = await fetch(`/metrics/clients/fingerprints?${params.toString()}`);
+    if (!res.ok) {
+        throw new Error('Failed to fetch client fingerprint metrics: ' + res.status);
+    }
+    return res.json();
+}
+
+function renderClientFingerprintTable(rows) {
+    const table = document.getElementById('clientFingerprintTable');
+    if (!table) {
+        return;
+    }
+    const tbody = table.querySelector('tbody');
+    if (!tbody) {
+        return;
+    }
+
+    while (tbody.firstChild) {
+        tbody.removeChild(tbody.firstChild);
+    }
+
+    if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 11;
+        td.textContent = 'No clients with UA/TLS drift detected yet.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
+
+    const fmtTs = ts => {
+        if (!ts) return '';
+        const d = new Date(ts);
+        return d.toLocaleString();
+    };
+
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+
+        const ipCell = document.createElement('td');
+        ipCell.textContent = row.client_ip || '';
+
+        const hintCell = document.createElement('td');
+        hintCell.textContent = row.client_hint || '';
+
+        const obsCell = document.createElement('td');
+        obsCell.textContent = String(row.observation_count);
+
+        const uaCell = document.createElement('td');
+        const ua = row.current_ua || '';
+        uaCell.textContent = ua.length > 60 ? ua.slice(0, 57) + '…' : ua;
+        uaCell.title = ua;
+
+        const variantsCell = document.createElement('td');
+        variantsCell.textContent = String(row.ua_variant_count);
+
+        const uaChangeCell = document.createElement('td');
+        uaChangeCell.textContent = String(row.ua_change_count);
+
+        const tlsChangeCell = document.createElement('td');
+        tlsChangeCell.textContent = String(row.tls_change_count);
+
+        const uaDriftCell = document.createElement('td');
+        uaDriftCell.textContent = row.has_ua_drift ? 'yes' : '';
+
+        const tlsDriftCell = document.createElement('td');
+        tlsDriftCell.textContent = row.has_tls_drift ? 'yes' : '';
+
+        const firstCell = document.createElement('td');
+        firstCell.textContent = fmtTs(row.first_seen);
+
+        const lastCell = document.createElement('td');
+        lastCell.textContent = fmtTs(row.last_seen);
+
+        tr.appendChild(ipCell);
+        tr.appendChild(hintCell);
+        tr.appendChild(obsCell);
+        tr.appendChild(uaCell);
+        tr.appendChild(variantsCell);
+        tr.appendChild(uaChangeCell);
+        tr.appendChild(tlsChangeCell);
+        tr.appendChild(uaDriftCell);
+        tr.appendChild(tlsDriftCell);
+        tr.appendChild(firstCell);
+        tr.appendChild(lastCell);
+
+        tbody.appendChild(tr);
+    }
+}
+
+async function initClientFingerprintTable() {
+    const table = document.getElementById('clientFingerprintTable');
+    if (!table) {
+        return;
+    }
+
+    let rows;
+    try {
+        rows = await fetchClientFingerprints(1, 100);
+    } catch (err) {
+        console.error(err);
+        return;
+    }
+
+    renderClientFingerprintTable(rows);
+}
 
 
 //
@@ -629,4 +741,5 @@ export async function initAnalysisUI() {
     await initClientErrorTable();
     await initRouteSizeTable();
     await initEndpointAnomalyTable();
+    await initClientFingerprintTable();
 }

@@ -690,3 +690,102 @@ func handleMethodPathAnomalies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+type clientFingerprintDTO struct {
+	ClientIP         string    `json:"client_ip"`
+	ClientHint       string    `json:"client_hint"`
+	FirstSeen        time.Time `json:"first_seen"`
+	LastSeen         time.Time `json:"last_seen"`
+	ObservationCount int64     `json:"observation_count"`
+
+	CurrentUA      string           `json:"current_ua"`
+	UAChangeCount  int64            `json:"ua_change_count"`
+	UAVariants     map[string]int64 `json:"ua_variants"` // UA string -> count
+	UAVariantCount int              `json:"ua_variant_count"`
+
+	TLSChangeCount int64 `json:"tls_change_count"`
+
+	HasUADrift  bool `json:"has_ua_drift"`
+	HasTLSDrift bool `json:"has_tls_drift"`
+}
+
+// GET /metrics/clients/fingerprints
+//
+// Query params (optional):
+//
+//	?min_changes=<N> -> minimum UA+TLS change count (default 1)
+//	?limit=<K>       -> max number of clients (default 100)
+func handleClientFingerprintMetrics(w http.ResponseWriter, r *http.Request) {
+	if analysisRegistry == nil {
+		http.Error(w, "analysis registry not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	cfa := analysisRegistry.ClientFingerprint()
+	if cfa == nil {
+		http.Error(w, "client fingerprint analyzer not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+
+	minChanges := int64(1)
+	if s := q.Get("min_changes"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
+			minChanges = v
+		}
+	}
+
+	limit := 100
+	if s := q.Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	snap := cfa.Snapshot(minChanges)
+
+	dtos := make([]clientFingerprintDTO, 0, len(snap))
+	for _, s := range snap {
+		variantCount := len(s.UserAgents)
+
+		dto := clientFingerprintDTO{
+			ClientIP:         s.ClientIP,
+			ClientHint:       s.ClientHint,
+			FirstSeen:        s.FirstSeen,
+			LastSeen:         s.LastSeen,
+			ObservationCount: s.ObservationCount,
+
+			CurrentUA:      s.CurrentUA,
+			UAChangeCount:  s.UAChangeCount,
+			UAVariants:     s.UserAgents,
+			UAVariantCount: variantCount,
+
+			TLSChangeCount: s.TLSChangeCount,
+
+			HasUADrift:  s.HasUADrift,
+			HasTLSDrift: s.HasTLSDrift,
+		}
+		dtos = append(dtos, dto)
+	}
+
+	// Sort by total drift (UA+TLS) descending, then by observation count.
+	sort.Slice(dtos, func(i, j int) bool {
+		ti := dtos[i].UAChangeCount + dtos[i].TLSChangeCount
+		tj := dtos[j].UAChangeCount + dtos[j].TLSChangeCount
+		if ti != tj {
+			return ti > tj
+		}
+		return dtos[i].ObservationCount > dtos[j].ObservationCount
+	})
+
+	if len(dtos) > limit {
+		dtos = dtos[:limit]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(dtos); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
