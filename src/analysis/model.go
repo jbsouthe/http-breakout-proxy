@@ -95,52 +95,12 @@ func (r *Registry) OnRequest(ev *ObservedRequest) {
 	}
 }
 
-//
-// 3. Latency distribution profiling per route
-//
-
 // QuantileEstimate is a minimal struct for latency quantiles.
 // If you use HDR histograms or t-digests, you can wrap them here.
 type QuantileEstimate struct {
 	P50 time.Duration
 	P90 time.Duration
 	P99 time.Duration
-}
-
-//
-// 4. Error-state transition analysis per client
-//
-
-// TransitionMatrix tracks transitions between coarse outcomes.
-type TransitionMatrix struct {
-	// counts[from][to]
-	Counts [6][6]uint64
-}
-
-// ErrorTransitionState is per-client state.
-type ErrorTransitionState struct {
-	LastOutcome       Outcome
-	LastOutcomeValid  bool
-	Transitions       TransitionMatrix
-	LastUpdated       time.Time
-	Consecutive5xx    int64
-	Consecutive4xx    int64
-	ConsecutiveErrors int64 // network + 5xx
-}
-
-// ErrorTransitionAnalyzer keeps state per client.
-type ErrorTransitionAnalyzer struct {
-	ByClient map[ClientID]*ErrorTransitionState
-}
-
-func NewErrorTransitionAnalyzer() *ErrorTransitionAnalyzer {
-	return &ErrorTransitionAnalyzer{
-		ByClient: make(map[ClientID]*ErrorTransitionState),
-	}
-}
-
-func (e *ErrorTransitionAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Update transition matrix and counters.
 }
 
 //

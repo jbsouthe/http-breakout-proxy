@@ -289,6 +289,99 @@ async function initRouteLatencyTable() {
     renderRouteLatencyTable(rows);
 }
 
+async function fetchClientErrors(minErrors = 3, limit = 100) {
+    const params = new URLSearchParams();
+    if (minErrors > 0) params.set('min', String(minErrors));
+    if (limit > 0) params.set('limit', String(limit));
+
+    const res = await fetch(`/metrics/errors/clients?${params.toString()}`);
+    if (!res.ok) {
+        throw new Error('Failed to fetch client error metrics: ' + res.status);
+    }
+    return res.json();
+}
+
+function renderClientErrorTable(rows) {
+    const table = document.getElementById('clientErrorTable');
+    if (!table) {
+        return;
+    }
+    const tbody = table.querySelector('tbody');
+    if (!tbody) {
+        return;
+    }
+
+    // Clear existing rows
+    while (tbody.firstChild) {
+        tbody.removeChild(tbody.firstChild);
+    }
+
+    if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 7;
+        td.textContent = 'No clients with significant error streaks.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
+
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+
+        const ipCell = document.createElement('td');
+        ipCell.textContent = row.client_ip || '';
+
+        const uaCell = document.createElement('td');
+        // Keep cell concise, full UA in title
+        uaCell.textContent = row.user_agent ? row.user_agent.slice(0, 40) + (row.user_agent.length > 40 ? '…' : '') : '';
+        uaCell.title = row.user_agent || '';
+
+        const c5xxCell = document.createElement('td');
+        c5xxCell.textContent = String(row.consecutive_5xx);
+
+        const c4xxCell = document.createElement('td');
+        c4xxCell.textContent = String(row.consecutive_4xx);
+
+        const cerrCell = document.createElement('td');
+        cerrCell.textContent = String(row.consecutive_errors);
+
+        const outcomeCell = document.createElement('td');
+        outcomeCell.textContent = row.last_outcome || '';
+
+        const lastCell = document.createElement('td');
+        const last = row.last_updated ? new Date(row.last_updated) : null;
+        lastCell.textContent = last ? last.toLocaleString() : '';
+
+        tr.appendChild(ipCell);
+        tr.appendChild(uaCell);
+        tr.appendChild(c5xxCell);
+        tr.appendChild(c4xxCell);
+        tr.appendChild(cerrCell);
+        tr.appendChild(outcomeCell);
+        tr.appendChild(lastCell);
+
+        tbody.appendChild(tr);
+    }
+}
+
+async function initClientErrorTable() {
+    const table = document.getElementById('clientErrorTable');
+    if (!table) {
+        return;
+    }
+
+    let rows;
+    try {
+        rows = await fetchClientErrors(3, 100);
+    } catch (err) {
+        console.error(err);
+        return;
+    }
+
+    renderClientErrorTable(rows);
+}
+
 
 //
 // ---- Public entrypoint the rest of the app calls ----
@@ -299,4 +392,5 @@ export async function initAnalysisUI() {
     await initTemporalChart();
     await initRetryTable();
     await initRouteLatencyTable();
+    await initClientErrorTable();
 }

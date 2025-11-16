@@ -372,3 +372,93 @@ func RebuildAnalysisFromCaptures(reg *analysis.Registry, captures []Capture) {
 		reg.OnRequest(ev)
 	}
 }
+
+type clientErrorDTO struct {
+	ClientIP          string       `json:"client_ip"`
+	UserAgent         string       `json:"user_agent"`
+	ClientHint        string       `json:"client_hint"`
+	Consecutive5xx    int64        `json:"consecutive_5xx"`
+	Consecutive4xx    int64        `json:"consecutive_4xx"`
+	ConsecutiveErrors int64        `json:"consecutive_errors"`
+	LastOutcome       retryOutcome `json:"last_outcome"`
+	LastUpdated       time.Time    `json:"last_updated"`
+}
+
+// handleClientErrorMetrics exposes per-client error state.
+//
+// Query params (all optional):
+//
+//	?min=<N>    -> minimum streak length (applied to 5xx, 4xx, or errors). Default: 3
+//	?limit=<K>  -> maximum number of clients to return. Default: 100
+func handleClientErrorMetrics(w http.ResponseWriter, r *http.Request) {
+	if analysisRegistry == nil {
+		http.Error(w, "analysis registry not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	eta := analysisRegistry.ErrorTransitions()
+	if eta == nil {
+		http.Error(w, "error transition analyzer not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+
+	minErrors := int64(3)
+	if s := q.Get("min"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v > 0 {
+			minErrors = v
+		}
+	}
+
+	limit := 100
+	if s := q.Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	snap := eta.Snapshot(minErrors)
+
+	if len(snap) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]clientErrorDTO{})
+		return
+	}
+
+	dtos := make([]clientErrorDTO, 0, len(snap))
+	for _, s := range snap {
+		dto := clientErrorDTO{
+			ClientIP:          s.Client.IP,
+			UserAgent:         s.Client.UserAgent,
+			ClientHint:        s.Client.ClientHint,
+			Consecutive5xx:    s.Consecutive5xx,
+			Consecutive4xx:    s.Consecutive4xx,
+			ConsecutiveErrors: s.ConsecutiveErrors,
+			LastOutcome:       mapOutcome(s.LastOutcome),
+			LastUpdated:       s.LastUpdated,
+		}
+		dtos = append(dtos, dto)
+	}
+
+	// Sort by descending severity: ConsecutiveErrors, then Consecutive5xx, then Consecutive4xx.
+	sort.Slice(dtos, func(i, j int) bool {
+		if dtos[i].ConsecutiveErrors != dtos[j].ConsecutiveErrors {
+			return dtos[i].ConsecutiveErrors > dtos[j].ConsecutiveErrors
+		}
+		if dtos[i].Consecutive5xx != dtos[j].Consecutive5xx {
+			return dtos[i].Consecutive5xx > dtos[j].Consecutive5xx
+		}
+		return dtos[i].Consecutive4xx > dtos[j].Consecutive4xx
+	})
+
+	if len(dtos) > limit {
+		dtos = dtos[:limit]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(dtos); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
