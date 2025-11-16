@@ -127,12 +127,15 @@ func main() {
 			return
 		}
 		switch {
+		case r.URL.Path == "/metrics/temporal":
+			handleTemporalMetrics(w, r)
 		case r.URL.Path == "/events",
 			strings.HasPrefix(r.URL.Path, "/api/"),
 			strings.HasSuffix(r.URL.Path, ".js"),
 			strings.HasSuffix(r.URL.Path, ".css"),
 			strings.HasSuffix(r.URL.Path, ".html"),
 			r.URL.Path == "/":
+
 			uiHandler.ServeHTTP(w, r)
 		default:
 			proxyHandler.ServeHTTP(w, r)

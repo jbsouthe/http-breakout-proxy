@@ -48,6 +48,7 @@ type ObservedRequest struct {
 	StatusCode  int
 	Outcome     Outcome
 	Method      string
+	Scheme      string
 	Proto       string
 	Path        string
 	Query       string
@@ -63,6 +64,11 @@ type ObservedRequest struct {
 
 	// If the proxy saw a transport-level error.
 	TransportErr error
+
+	//Some other useful fields
+	TLS        TLSSignature
+	ServerAddr string
+	IsGRPC     bool
 }
 
 //
@@ -87,41 +93,6 @@ func (r *Registry) OnRequest(ev *ObservedRequest) {
 	for _, a := range r.analyzers {
 		a.OnRequest(ev)
 	}
-}
-
-//
-// 1. Temporal distribution analysis
-//
-
-// TimeBucket aggregates request counts/latency in a sliding window bucket.
-type TimeBucket struct {
-	WindowStart time.Time
-	Count       int64
-
-	// Basic latency stats in the bucket; you can extend as needed.
-	TotalLatency   time.Duration
-	MaxLatency     time.Duration
-	MinLatency     time.Duration
-	SquaredLatency float64 // for variance estimation
-}
-
-// TemporalAnalyzer holds a fixed-size ring buffer of TimeBuckets.
-type TemporalAnalyzer struct {
-	Resolution time.Duration // e.g. 1s buckets
-	Buckets    []TimeBucket  // ring buffer
-	Index      int           // current index in ring
-}
-
-// NewTemporalAnalyzer allocates a temporal ring (e.g., size = 60 for 1m at 1s resolution).
-func NewTemporalAnalyzer(bucketCount int, resolution time.Duration) *TemporalAnalyzer {
-	return &TemporalAnalyzer{
-		Resolution: resolution,
-		Buckets:    make([]TimeBucket, bucketCount),
-	}
-}
-
-func (t *TemporalAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Implementation to map ev.Timestamp to a bucket index is up to you.
 }
 
 //
@@ -402,7 +373,7 @@ func (e *EntropyAnalyzer) OnRequest(ev *ObservedRequest) {
 // NewDefaultRegistry shows how you can wire up a combined analyzer set.
 func NewDefaultRegistry() *Registry {
 	return NewRegistry(
-		NewTemporalAnalyzer(60, time.Second),
+		NewTemporalAnalyzer(time.Second, 300),
 		NewRetryAnalyzer(30*time.Second),
 		NewLatencyAnalyzer(),
 		NewErrorTransitionAnalyzer(),
@@ -412,4 +383,19 @@ func NewDefaultRegistry() *Registry {
 		NewAuthStabilityAnalyzer(),
 		NewEntropyAnalyzer(),
 	)
+}
+
+func ClassifyOutcome(status int) Outcome {
+	switch {
+	case status >= 200 && status < 300:
+		return Outcome2xx
+	case status >= 300 && status < 400:
+		return Outcome3xx
+	case status >= 400 && status < 500:
+		return Outcome4xx
+	case status >= 500:
+		return Outcome5xx
+	default:
+		return OutcomeOther
+	}
 }

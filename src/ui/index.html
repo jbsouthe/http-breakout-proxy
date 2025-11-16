@@ -54,6 +54,7 @@
 
         <div class="tabs" role="tablist">
             <button class="tab" data-tab="overview">Overview</button>
+            <button class="tab" data-tab="analysis">Analysis</button>
             <button class="tab" data-tab="request">Request</button>
             <button class="tab" data-tab="response">Response</button>
             <button class="tab" data-tab="raw">Raw</button>
@@ -107,6 +108,11 @@
 
         </div>
         </div>
+        <div id="tab-analysis" class="tab-pane" style="display:none">
+            <div style="height: 200px;">
+                <canvas id="temporalChart"></canvas>
+            </div>
+        </div>
         <div id="tab-request" class="tab-pane" style="display:none">
             <pre id="req-body"></pre>
         </div>
@@ -119,6 +125,7 @@
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script type="module" src="js/main.js" defer></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
