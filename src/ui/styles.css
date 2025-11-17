@@ -489,3 +489,24 @@ pre {
     .panel{margin-bottom:12px}
     .topbar input{ width: 100%; max-width: none; }
 }
+
+.topnav-tabs {
+    display: inline-flex;
+    margin-left: 16px;
+    gap: 4px;
+}
+
+.top-tab {
+    border: none;
+    background: transparent;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--muted);
+}
+
+.top-tab--active {
+    background: var(--accent-bg, #2a2f3a);
+    color: #fff;
+}

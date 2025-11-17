@@ -81,6 +81,37 @@ async function bindUI() {
     });
 }
 
+function setupTopLevelTabs() {
+    const capturesView = document.getElementById('capturesView');
+    const analysisView = document.getElementById('analysisView');
+    const capturesBtn  = document.getElementById('topTabCaptures');
+    const analysisBtn  = document.getElementById('topTabAnalysis');
+
+    if (!capturesView || !analysisView || !capturesBtn || !analysisBtn) {
+        return;
+    }
+
+    function setActive(mode) {
+        const showCaptures = mode === 'captures';
+
+        // Captures view: use "contents" so grid layout works.
+        capturesView.style.display = showCaptures ? 'contents' : 'none';
+
+        // Analysis view: simple block layout occupying the main area.
+        analysisView.style.display = showCaptures ? 'none' : 'block';
+
+        capturesBtn.classList.toggle('top-tab--active', showCaptures);
+        analysisBtn.classList.toggle('top-tab--active', !showCaptures);
+    }
+
+    capturesBtn.addEventListener('click', () => setActive('captures'));
+    analysisBtn.addEventListener('click', () => setActive('analysis'));
+
+    // Default to Captures on load.
+    setActive('captures');
+}
+
+
 async function loadInitial() {
     await fetchInitialData();
     await refreshRulesFromServer();
@@ -90,6 +121,7 @@ async function loadInitial() {
 }
 
 async function init() {
+    setupTopLevelTabs();
     setupTabs();
     await bindUI();
     await bindSearchHistoryUI();

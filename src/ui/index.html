@@ -9,290 +9,302 @@
 <body>
 <div id="app">
     <div class="topbar" role="region" aria-label="toolbar">
-        <div class="h-title" style="font-weight:600">Captures</div>
+        <div class="h-title" style="font-weight:600">Proxy Inspector</div>
+
+        <!-- New top-level tabs -->
+        <div class="topnav-tabs">
+            <button id="topTabCaptures" class="top-tab top-tab--active">Captures</button>
+            <button id="topTabAnalysis" class="top-tab">Analysis</button>
+        </div>
         <div class="spacer"></div>
 
-        <!-- Reuse existing IDs so JS stays the same -->
-        <div id="filterBar" class="filter-bar">
-            <input id="filterInput" placeholder="Filter (free text, color:, method:, status:, host:, url:, body:, header:, regex /…/i)" />
-            <button id="saveSearchBtn" title="Save current filter">★</button>
-            <button id="historyBtn" title="Search history">⏱</button>
-            <div id="historyMenu" class="history-menu" aria-hidden="true"></div>
-        </div>
-        <button id="colorRulesBtn" title="Define color tagging rules">Color Rules</button>
-        <button id="pauseBtn" class="but" title="Pause Capture">Pause</button>
-        <button id="clearBtn" class="but but-danger" title="Clear all captures">Clear</button>
-        <a href="/filter-help.html" target="_blank" class="but" title="Open filter syntax reference">Filter Help</a>
     </div>
-    <div class="panel" aria-label="capture-list" style="grid-row:2; grid-column:1">
-        <div class="header">
-            <div class="h-title">List</div>
-            <!-- removed: per-panel .search controls -->
+    <div id="capturesView" style="display:contents;">
+        <div id="filterRow"
+             style="grid-row:2; grid-column:1 / span 2; padding:8px 12px; display:flex; gap:8px; align-items:center;">
+            <div id="filterBar" class="filter-bar" style="flex:1;">
+                <input id="filterInput"
+                       placeholder="Filter (free text, color:, method:, status:, host:, url:, body:, header:, regex /…/i)" />
+                <button id="saveSearchBtn" title="Save current filter">★</button>
+                <button id="historyBtn" title="Search history">⏱</button>
+                <div id="historyMenu" class="history-menu" aria-hidden="true"></div>
+            </div>
+            <button id="colorRulesBtn" title="Define color tagging rules">Color Rules</button>
+            <button id="pauseBtn" class="but" title="Pause Capture">Pause</button>
+            <button id="clearBtn" class="but but-danger" title="Clear all captures">Clear</button>
+            <a href="/filter-help.html" target="_blank" class="but">Help</a>
         </div>
-        <div id="list" class="list" tabindex="0" aria-label="capture-list-rows"></div>
-        <div style="margin-top:8px;color:var(--muted);font-size:12px">
-            Live — new captures appear at top. Keyboard: / focus search • ↑/↓ select • d download
+
+        <div class="panel" aria-label="capture-list" style="grid-row:3; grid-column:1">
+            <div class="header">
+                <div class="h-title">List</div>
+            </div>
+
+            <div id="list" class="list" tabindex="0" aria-label="capture-list-rows"></div>
+            <div style="margin-top:8px;color:var(--muted);font-size:12px">
+                Live — new captures appear at top. Keyboard: / focus search • ↑/↓ select • d download
+            </div>
+        </div>
+
+        <div id="details" class="details" style="grid-row:3; grid-column:2;">
+            <div class="details-top">
+                <div>
+                    <span id="colorRuleBadge" class="badge" style="display:none;"></span>
+                    <div id="titleLarge" class="titleLarge">No capture selected</div>
+                    <div id="subMeta" class="subMeta">Select a request on the left to view details</div>
+                </div>
+                <div class="row-actions">
+                    <button id="renameBtn" class="but" title="Rename capture">Rename</button>
+                    <button id="copyCurlBtn" class="but" title="Copy cURL">Copy cURL</button>
+                    <button id="copyPythonBtn" class="but" title="Copy as Python requests">Copy Python</button>
+                    <button id="downloadBtn" class="but" title="Download Response">Download Response</button>
+                    <button id="openRawBtn" class="but" title="Open raw in new tab">Open Raw</button>
+                    <button id="deleteBtn" class="but but-danger" title="Delete capture">Delete</button>
+                </div>
+            </div>
+
+            <div class="tabs" role="tablist">
+                <button class="tab" data-tab="overview">Overview</button>
+                <button class="tab" data-tab="request">Request</button>
+                <button class="tab" data-tab="response">Response</button>
+                <button class="tab" data-tab="raw">Raw</button>
+            </div>
+
+            <div id="tab-overview" class="tab-pane">
+                <div id="content" class="content" role="main">
+                    <div id="pane-overview" class="pane">
+                        <div id="colorRuleNoteWrap" style="display:none; align-items:center; gap:8px; margin-top:6px;">
+                                <span id="colorRuleColorDot" aria-hidden="true"
+                                      style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#eee; border:1px solid rgba(0,0,0,.1)"></span>
+                            <input id="colorRuleNoteInput" type="text" class="badge"
+                                   style="min-width:280px;"
+                                   placeholder="Rule note…">
+                            <span id="colorRuleSaveHint" class="small" style="opacity:.7; display:none;">Saved</span>
+                        </div>
+                        <div class="kv">
+                            <div class="k">Method</div><div id="ov-method" style="color: #ffffff">-</div>
+                            <div class="k">URL</div><div id="ov-url" style="color: #ffffff">-</div>
+                            <div class="k">Status</div><div id="ov-status" style="color: #ffffff">-</div>
+                            <div class="k">Duration</div><div id="ov-duration">-</div>
+                            <div class="k">Time</div><div id="ov-time">-</div>
+                        </div>
+                        <div id="grpc-details" class="kv" style="display: none;">
+                            <div class="k">gRPC Method</div><div id="ov-grpc-method" class="v">-</div>
+                            <div class="k">gRPC Status</div><div id="ov-grpc-status" class="v">-</div>
+                            <div class="k">gRPC Message</div><div id="ov-grpc-message" class="v">-</div>
+                        </div>
+
+                        <div id="timingCard" class="card">
+                            <div class="card-title">Connection Timing</div>
+                            <div id="timingLegend" class="timing-legend"></div>
+                            <div id="timingGantt" class="timing-gantt" role="img" aria-label="Request timing chart"></div>
+                            <div id="timingStats" class="timing-stats small muted"></div>
+                        </div>
+
+                        <div class="headers">
+                            <h4 style="margin:8px 0 6px 0">Request Headers</h4>
+                            <div id="ov-req-headers"></div>
+
+                            <h4 style="margin:8px 0 6px 0">Request Body</h4>
+                            <div id="ov-req-body" class="boxed-text"></div>
+
+                            <h4 style="margin:12px 0 6px 0">Response Headers</h4>
+                            <div id="ov-resp-headers"></div>
+
+                            <h4 style="margin:8px 0 6px 0">Response Body</h4>
+                            <div id="ov-resp-body" class="boxed-text"></div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+            <div id="tab-request" class="tab-pane" style="display:none">
+                <pre id="req-body"></pre>
+            </div>
+            <div id="tab-response" class="tab-pane" style="display:none">
+                <pre id="resp-body"></pre>
+            </div>
+            <div id="tab-raw" class="tab-pane" style="display:none">
+                <pre id="rawJson"></pre>
+            </div>
         </div>
     </div>
-
-    <div id="details" class="details">
-        <div class="details-top">
-            <div>
-                <span id="colorRuleBadge" class="badge" style="display:none;"></span>
-                <div id="titleLarge" class="titleLarge">No capture selected</div>
-                <div id="subMeta" class="subMeta">Select a request on the left to view details</div>
-            </div>
-            <div class="row-actions">
-                <button id="renameBtn" class="but" title="Rename capture">Rename</button>
-                <button id="copyCurlBtn" class="but" title="Copy cURL">Copy cURL</button>
-                <button id="copyPythonBtn" class="but" title="Copy as Python requests">Copy Python</button>
-                <button id="downloadBtn" class="but" title="Download Response">Download Response</button>
-                <button id="openRawBtn" class="but" title="Open raw in new tab">Open Raw</button>
-                <button id="deleteBtn" class="but but-danger" title="Delete capture">Delete</button>
-            </div>
+    <div id="analysisView"
+         style="grid-row:2; grid-column:1 / span 2; display:none; overflow:auto; padding:12px 16px;">
+        <h2>Temporal Latency</h2>
+        <div style="height: 200px;">
+            <canvas id="temporalChart"></canvas>
         </div>
+        <h2>Retry / Duplicate Requests</h2>
+        <table id="retryTable" class="table">
+            <thead>
+            <tr>
+                <th>Client IP</th>
+                <th>Method</th>
+                <th>Host</th>
+                <th>Path</th>
+                <th>Count</th>
+                <th>Last Status</th>
+                <th>Last Seen</th>
+            </tr>
+            </thead>
+            <tbody>
+            <!-- filled by analysis.js -->
+            </tbody>
+        </table>
+        <h2>Per-Route Latency</h2>
+        <table id="routeLatencyTable" class="table">
+            <thead>
+            <tr>
+                <th>Method</th>
+                <th>Host</th>
+                <th>Path</th>
+                <th>Count</th>
+                <th>Mean (ms)</th>
+                <th>Stddev (ms)</th>
+                <th>Min (ms)</th>
+                <th>Max (ms)</th>
+                <th>Last Updated</th>
+            </tr>
+            </thead>
+            <tbody>
+            <!-- filled by analysis.js -->
+            </tbody>
+        </table>
 
-        <div class="tabs" role="tablist">
-            <button class="tab" data-tab="overview">Overview</button>
-            <button class="tab" data-tab="analysis">Analysis</button>
-            <button class="tab" data-tab="request">Request</button>
-            <button class="tab" data-tab="response">Response</button>
-            <button class="tab" data-tab="raw">Raw</button>
-        </div>
+        <h2>Client Error State</h2>
+        <table id="clientErrorTable" class="table">
+            <thead>
+            <tr>
+                <th>Client IP</th>
+                <th>User Agent</th>
+                <th>Consecutive 5xx</th>
+                <th>Consecutive 4xx</th>
+                <th>Consecutive Errors</th>
+                <th>Last Outcome</th>
+                <th>Last Updated</th>
+            </tr>
+            </thead>
+            <tbody>
+            <!-- filled by analysis.js -->
+            </tbody>
+        </table>
 
-        <div id="tab-overview" class="tab-pane">
-            <div id="content" class="content" role="main">
-            <div id="pane-overview" class="pane">
-                <div id="colorRuleNoteWrap" style="display:none; align-items:center; gap:8px; margin-top:6px;">
-                        <span id="colorRuleColorDot" aria-hidden="true"
-                              style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#eee; border:1px solid rgba(0,0,0,.1)"></span>
-                    <input id="colorRuleNoteInput" type="text" class="badge"
-                           style="min-width:280px;"
-                           placeholder="Rule note…">
-                    <span id="colorRuleSaveHint" class="small" style="opacity:.7; display:none;">Saved</span>
-                </div>
-                <div class="kv">
-                    <div class="k">Method</div><div id="ov-method" style="color: #ffffff">-</div>
-                    <div class="k">URL</div><div id="ov-url" style="color: #ffffff">-</div>
-                    <div class="k">Status</div><div id="ov-status" style="color: #ffffff">-</div>
-                    <div class="k">Duration</div><div id="ov-duration">-</div>
-                    <div class="k">Time</div><div id="ov-time">-</div>
-                </div>
-                <div id="grpc-details" class="kv" style="display: none;">
-                    <div class="k">gRPC Method</div><div id="ov-grpc-method" class="v">-</div>
-                    <div class="k">gRPC Status</div><div id="ov-grpc-status" class="v">-</div>
-                    <div class="k">gRPC Message</div><div id="ov-grpc-message" class="v">-</div>
-                </div>
+        <h2>Per-Route Payload Size</h2>
+        <table id="routeSizeTable" class="table">
+            <thead>
+            <tr>
+                <th>Method</th>
+                <th>Host</th>
+                <th>Path</th>
+                <th>Req Count</th>
+                <th>Req Mean (bytes)</th>
+                <th>Req Stddev</th>
+                <th>Req Min</th>
+                <th>Req Max</th>
+                <th>Res Count</th>
+                <th>Res Mean (bytes)</th>
+                <th>Res Stddev</th>
+                <th>Res Min</th>
+                <th>Res Max</th>
+                <th>Last Updated</th>
+            </tr>
+            </thead>
+            <tbody>
+            <!-- filled by analysis.js -->
+            </tbody>
+        </table>
 
-                <div id="timingCard" class="card">
-                    <div class="card-title">Connection Timing</div>
-                    <div id="timingLegend" class="timing-legend"></div>
-                    <div id="timingGantt" class="timing-gantt" role="img" aria-label="Request timing chart"></div>
-                    <div id="timingStats" class="timing-stats small muted"></div>
-                </div>
+        <h2>Endpoint Anomalies (Method / Path)</h2>
+        <table id="endpointAnomalyTable" class="table">
+            <thead>
+            <tr>
+                <th>Method</th>
+                <th>Host</th>
+                <th>Path</th>
+                <th>Count</th>
+                <th>Non-standard method</th>
+                <th>High-entropy path</th>
+                <th>Rare</th>
+                <th>Status codes</th>
+                <th>First seen</th>
+                <th>Last seen</th>
+            </tr>
+            </thead>
+            <tbody>
+            <!-- filled by analysis.js -->
+            </tbody>
+        </table>
 
-                <div class="headers">
-                    <h4 style="margin:8px 0 6px 0">Request Headers</h4>
-                    <div id="ov-req-headers"></div>
+        <h2>Client Fingerprints / UA Drift</h2>
+        <table id="clientFingerprintTable" class="table">
+            <thead>
+            <tr>
+                <th>Client IP</th>
+                <th>Client hint</th>
+                <th>Observations</th>
+                <th>Current UA</th>
+                <th>UA variants</th>
+                <th>UA changes</th>
+                <th>TLS changes</th>
+                <th>UA drift</th>
+                <th>TLS drift</th>
+                <th>First seen</th>
+                <th>Last seen</th>
+            </tr>
+            </thead>
+            <tbody>
+            <!-- filled by analysis.js -->
+            </tbody>
+        </table>
 
-                    <h4 style="margin:8px 0 6px 0">Request Body</h4>
-                    <div id="ov-req-body" class="boxed-text"></div>
+        <h2>Auth / Cookie Stability</h2>
+        <table id="authCookieTable" class="table">
+            <thead>
+            <tr>
+                <th>Client IP</th>
+                <th>Host</th>
+                <th>User Agent</th>
+                <th>Total requests</th>
+                <th>Auth present</th>
+                <th>Auth missing</th>
+                <th>Auth changes</th>
+                <th>Cookie pattern changes</th>
+                <th>Auth flapping</th>
+                <th>Cookie drift</th>
+                <th>Current cookie pattern</th>
+                <th>First seen</th>
+                <th>Last seen</th>
+            </tr>
+            </thead>
+            <tbody>
+            <!-- filled by analysis.js -->
+            </tbody>
+        </table>
 
-                    <h4 style="margin:12px 0 6px 0">Response Headers</h4>
-                    <div id="ov-resp-headers"></div>
+        <h2>Response Entropy / Content-Type Drift</h2>
+        <table id="responseProfileTable" class="table">
+            <thead>
+            <tr>
+                <th>Method</th>
+                <th>Host</th>
+                <th>Path</th>
+                <th>Count</th>
+                <th>Primary Content-Type</th>
+                <th>Content-Type changes</th>
+                <th>High-entropy count</th>
+                <th>Low-entropy count</th>
+                <th>CT drift</th>
+                <th>Entropy mix</th>
+                <th>First seen</th>
+                <th>Last seen</th>
+            </tr>
+            </thead>
+            <tbody>
+            <!-- filled by analysis.js -->
+            </tbody>
+        </table>
 
-                    <h4 style="margin:8px 0 6px 0">Response Body</h4>
-                    <div id="ov-resp-body" class="boxed-text"></div>
-                </div>
-            </div>
-
-        </div>
-        </div>
-        <div id="tab-analysis" class="tab-pane" style="display:none">
-            <h2>Temporal Latency</h2>
-            <div style="height: 200px;">
-                <canvas id="temporalChart"></canvas>
-            </div>
-            <h2>Retry / Duplicate Requests</h2>
-            <table id="retryTable" class="table">
-                <thead>
-                <tr>
-                    <th>Client IP</th>
-                    <th>Method</th>
-                    <th>Host</th>
-                    <th>Path</th>
-                    <th>Count</th>
-                    <th>Last Status</th>
-                    <th>Last Seen</th>
-                </tr>
-                </thead>
-                <tbody>
-                <!-- filled by analysis.js -->
-                </tbody>
-            </table>
-            <h2>Per-Route Latency</h2>
-            <table id="routeLatencyTable" class="table">
-                <thead>
-                <tr>
-                    <th>Method</th>
-                    <th>Host</th>
-                    <th>Path</th>
-                    <th>Count</th>
-                    <th>Mean (ms)</th>
-                    <th>Stddev (ms)</th>
-                    <th>Min (ms)</th>
-                    <th>Max (ms)</th>
-                    <th>Last Updated</th>
-                </tr>
-                </thead>
-                <tbody>
-                <!-- filled by analysis.js -->
-                </tbody>
-            </table>
-
-            <h2>Client Error State</h2>
-            <table id="clientErrorTable" class="table">
-                <thead>
-                <tr>
-                    <th>Client IP</th>
-                    <th>User Agent</th>
-                    <th>Consecutive 5xx</th>
-                    <th>Consecutive 4xx</th>
-                    <th>Consecutive Errors</th>
-                    <th>Last Outcome</th>
-                    <th>Last Updated</th>
-                </tr>
-                </thead>
-                <tbody>
-                <!-- filled by analysis.js -->
-                </tbody>
-            </table>
-
-            <h2>Per-Route Payload Size</h2>
-            <table id="routeSizeTable" class="table">
-                <thead>
-                <tr>
-                    <th>Method</th>
-                    <th>Host</th>
-                    <th>Path</th>
-                    <th>Req Count</th>
-                    <th>Req Mean (bytes)</th>
-                    <th>Req Stddev</th>
-                    <th>Req Min</th>
-                    <th>Req Max</th>
-                    <th>Res Count</th>
-                    <th>Res Mean (bytes)</th>
-                    <th>Res Stddev</th>
-                    <th>Res Min</th>
-                    <th>Res Max</th>
-                    <th>Last Updated</th>
-                </tr>
-                </thead>
-                <tbody>
-                <!-- filled by analysis.js -->
-                </tbody>
-            </table>
-
-            <h2>Endpoint Anomalies (Method / Path)</h2>
-            <table id="endpointAnomalyTable" class="table">
-                <thead>
-                <tr>
-                    <th>Method</th>
-                    <th>Host</th>
-                    <th>Path</th>
-                    <th>Count</th>
-                    <th>Non-standard method</th>
-                    <th>High-entropy path</th>
-                    <th>Rare</th>
-                    <th>Status codes</th>
-                    <th>First seen</th>
-                    <th>Last seen</th>
-                </tr>
-                </thead>
-                <tbody>
-                <!-- filled by analysis.js -->
-                </tbody>
-            </table>
-
-            <h2>Client Fingerprints / UA Drift</h2>
-            <table id="clientFingerprintTable" class="table">
-                <thead>
-                <tr>
-                    <th>Client IP</th>
-                    <th>Client hint</th>
-                    <th>Observations</th>
-                    <th>Current UA</th>
-                    <th>UA variants</th>
-                    <th>UA changes</th>
-                    <th>TLS changes</th>
-                    <th>UA drift</th>
-                    <th>TLS drift</th>
-                    <th>First seen</th>
-                    <th>Last seen</th>
-                </tr>
-                </thead>
-                <tbody>
-                <!-- filled by analysis.js -->
-                </tbody>
-            </table>
-
-            <h2>Auth / Cookie Stability</h2>
-            <table id="authCookieTable" class="table">
-                <thead>
-                <tr>
-                    <th>Client IP</th>
-                    <th>Host</th>
-                    <th>User Agent</th>
-                    <th>Total requests</th>
-                    <th>Auth present</th>
-                    <th>Auth missing</th>
-                    <th>Auth changes</th>
-                    <th>Cookie pattern changes</th>
-                    <th>Auth flapping</th>
-                    <th>Cookie drift</th>
-                    <th>Current cookie pattern</th>
-                    <th>First seen</th>
-                    <th>Last seen</th>
-                </tr>
-                </thead>
-                <tbody>
-                <!-- filled by analysis.js -->
-                </tbody>
-            </table>
-
-            <h2>Response Entropy / Content-Type Drift</h2>
-            <table id="responseProfileTable" class="table">
-                <thead>
-                <tr>
-                    <th>Method</th>
-                    <th>Host</th>
-                    <th>Path</th>
-                    <th>Count</th>
-                    <th>Primary Content-Type</th>
-                    <th>Content-Type changes</th>
-                    <th>High-entropy count</th>
-                    <th>Low-entropy count</th>
-                    <th>CT drift</th>
-                    <th>Entropy mix</th>
-                    <th>First seen</th>
-                    <th>Last seen</th>
-                </tr>
-                </thead>
-                <tbody>
-                <!-- filled by analysis.js -->
-                </tbody>
-            </table>
-
-        </div>
-        <div id="tab-request" class="tab-pane" style="display:none">
-            <pre id="req-body"></pre>
-        </div>
-        <div id="tab-response" class="tab-pane" style="display:none">
-            <pre id="resp-body"></pre>
-        </div>
-        <div id="tab-raw" class="tab-pane" style="display:none">
-            <pre id="rawJson"></pre>
-        </div>
     </div>
 </div>
 
