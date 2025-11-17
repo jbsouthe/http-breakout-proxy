@@ -260,6 +260,29 @@
                 </tbody>
             </table>
 
+            <h2>Response Entropy / Content-Type Drift</h2>
+            <table id="responseProfileTable" class="table">
+                <thead>
+                <tr>
+                    <th>Method</th>
+                    <th>Host</th>
+                    <th>Path</th>
+                    <th>Count</th>
+                    <th>Primary Content-Type</th>
+                    <th>Content-Type changes</th>
+                    <th>High-entropy count</th>
+                    <th>Low-entropy count</th>
+                    <th>CT drift</th>
+                    <th>Entropy mix</th>
+                    <th>First seen</th>
+                    <th>Last seen</th>
+                </tr>
+                </thead>
+                <tbody>
+                <!-- filled by analysis.js -->
+                </tbody>
+            </table>
+
         </div>
         <div id="tab-request" class="tab-pane" style="display:none">
             <pre id="req-body"></pre>

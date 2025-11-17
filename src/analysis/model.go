@@ -104,34 +104,6 @@ type QuantileEstimate struct {
 }
 
 //
-// 9. Response entropy / content-type drift
-//
-
-// EntropyStats stores simple entropy and drift tracking.
-type EntropyStats struct {
-	Count             int64
-	AvgEntropy        float64
-	LastEntropy       float64
-	ContentTypeCounts map[string]int64
-	LastUpdated       time.Time
-}
-
-// EntropyAnalyzer is keyed by RouteKey.
-type EntropyAnalyzer struct {
-	ByRoute map[RouteKey]*EntropyStats
-}
-
-func NewEntropyAnalyzer() *EntropyAnalyzer {
-	return &EntropyAnalyzer{
-		ByRoute: make(map[RouteKey]*EntropyStats),
-	}
-}
-
-func (e *EntropyAnalyzer) OnRequest(ev *ObservedRequest) {
-	// Compute approximate entropy from a sample of response body (if you store it) and update.
-}
-
-//
 // 10. Composed analyzer
 //
 
@@ -146,7 +118,7 @@ func NewDefaultRegistry() *Registry {
 		NewClientFingerprintAnalyzer(),
 		NewMethodPathAnalyzer(),
 		NewAuthCookieAnalyzer(),
-		NewEntropyAnalyzer(),
+		NewResponseProfileAnalyzer(),
 	)
 }
 

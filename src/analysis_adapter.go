@@ -906,3 +906,124 @@ func handleAuthCookieStability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+type responseProfileDTO struct {
+	Method string `json:"method"`
+	Host   string `json:"host"`
+	Path   string `json:"path"`
+
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+	Count     int64     `json:"count"`
+
+	PrimaryContentType     string           `json:"primary_content_type"`
+	ContentTypeChangeCount int64            `json:"content_type_change_count"`
+	ContentTypes           map[string]int64 `json:"content_types"`
+	ContentEncodings       map[string]int64 `json:"content_encodings"`
+
+	HighEntropyCount int64 `json:"high_entropy_count"`
+	LowEntropyCount  int64 `json:"low_entropy_count"`
+
+	HasContentTypeDrift bool `json:"has_content_type_drift"`
+	HasEntropyMix       bool `json:"has_entropy_mix"`
+}
+
+// GET /metrics/response/profile
+//
+// Query params (optional):
+//
+//	?min_count=<N>   -> minimum requests per route (default: 5)
+//	?min_changes=<N> -> minimum "interesting" changes (CT drift or entropy mix) (default: 1)
+//	?limit=<K>       -> max number of routes (default: 100)
+func handleResponseProfileMetrics(w http.ResponseWriter, r *http.Request) {
+	if analysisRegistry == nil {
+		http.Error(w, "analysis registry not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	rp := analysisRegistry.ResponseProfile()
+	if rp == nil {
+		http.Error(w, "response profile analyzer not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+
+	minCount := int64(5)
+	if s := q.Get("min_count"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
+			minCount = v
+		}
+	}
+
+	minChanges := int64(1)
+	if s := q.Get("min_changes"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v >= 0 {
+			minChanges = v
+		}
+	}
+
+	limit := 100
+	if s := q.Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	snap := rp.Snapshot(minCount, minChanges)
+
+	dtos := make([]responseProfileDTO, 0, len(snap))
+	for _, s := range snap {
+		dto := responseProfileDTO{
+			Method: s.Route.Method,
+			Host:   s.Route.Host,
+			Path:   s.Route.Path,
+
+			FirstSeen: s.FirstSeen,
+			LastSeen:  s.LastSeen,
+			Count:     s.Count,
+
+			PrimaryContentType:     s.PrimaryContentType,
+			ContentTypeChangeCount: s.ContentTypeChangeCount,
+			ContentTypes:           s.ContentTypes,
+			ContentEncodings:       s.ContentEncodings,
+
+			HighEntropyCount: s.HighEntropyCount,
+			LowEntropyCount:  s.LowEntropyCount,
+
+			HasContentTypeDrift: s.HasContentTypeDrift,
+			HasEntropyMix:       s.HasEntropyMix,
+		}
+		dtos = append(dtos, dto)
+	}
+
+	// Sort by "interestingness": CT drift + entropy mix, then by Count.
+	sort.Slice(dtos, func(i, j int) bool {
+		score := func(x responseProfileDTO) int64 {
+			s := int64(0)
+			if x.HasContentTypeDrift {
+				s += 2
+			}
+			if x.HasEntropyMix {
+				s += 1
+			}
+			return s
+		}
+		si := score(dtos[i])
+		sj := score(dtos[j])
+		if si != sj {
+			return si > sj
+		}
+		return dtos[i].Count > dtos[j].Count
+	})
+
+	if len(dtos) > limit {
+		dtos = dtos[:limit]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(dtos); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}

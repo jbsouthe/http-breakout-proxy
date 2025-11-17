@@ -850,6 +850,122 @@ async function initAuthCookieTable() {
     renderAuthCookieTable(rows);
 }
 
+async function fetchResponseProfiles(minCount = 5, minChanges = 1, limit = 100) {
+    const params = new URLSearchParams();
+    if (minCount >= 0) params.set('min_count', String(minCount));
+    if (minChanges >= 0) params.set('min_changes', String(minChanges));
+    if (limit > 0) params.set('limit', String(limit));
+
+    const res = await fetch(`/metrics/response/profile?${params.toString()}`);
+    if (!res.ok) {
+        throw new Error('Failed to fetch response profile metrics: ' + res.status);
+    }
+    return res.json();
+}
+
+function renderResponseProfileTable(rows) {
+    const table = document.getElementById('responseProfileTable');
+    if (!table) {
+        return;
+    }
+    const tbody = table.querySelector('tbody');
+    if (!tbody) {
+        return;
+    }
+
+    while (tbody.firstChild) {
+        tbody.removeChild(tbody.firstChild);
+    }
+
+    if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 12;
+        td.textContent = 'No routes with significant content-type drift or entropy mix yet.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+    }
+
+    const fmtTs = ts => {
+        if (!ts) return '';
+        const d = new Date(ts);
+        return d.toLocaleString();
+    };
+
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+
+        const methodCell = document.createElement('td');
+        methodCell.textContent = row.method;
+
+        const hostCell = document.createElement('td');
+        hostCell.textContent = row.host;
+
+        const pathCell = document.createElement('td');
+        pathCell.textContent = row.path;
+
+        const countCell = document.createElement('td');
+        countCell.textContent = String(row.count);
+
+        const ctCell = document.createElement('td');
+        ctCell.textContent = row.primary_content_type || '';
+
+        const ctChangeCell = document.createElement('td');
+        ctChangeCell.textContent = String(row.content_type_change_count);
+
+        const highCell = document.createElement('td');
+        highCell.textContent = String(row.high_entropy_count);
+
+        const lowCell = document.createElement('td');
+        lowCell.textContent = String(row.low_entropy_count);
+
+        const driftCell = document.createElement('td');
+        driftCell.textContent = row.has_content_type_drift ? 'yes' : '';
+
+        const mixCell = document.createElement('td');
+        mixCell.textContent = row.has_entropy_mix ? 'yes' : '';
+
+        const firstCell = document.createElement('td');
+        firstCell.textContent = fmtTs(row.first_seen);
+
+        const lastCell = document.createElement('td');
+        lastCell.textContent = fmtTs(row.last_seen);
+
+        tr.appendChild(methodCell);
+        tr.appendChild(hostCell);
+        tr.appendChild(pathCell);
+        tr.appendChild(countCell);
+        tr.appendChild(ctCell);
+        tr.appendChild(ctChangeCell);
+        tr.appendChild(highCell);
+        tr.appendChild(lowCell);
+        tr.appendChild(driftCell);
+        tr.appendChild(mixCell);
+        tr.appendChild(firstCell);
+        tr.appendChild(lastCell);
+
+        tbody.appendChild(tr);
+    }
+}
+
+async function initResponseProfileTable() {
+    const table = document.getElementById('responseProfileTable');
+    if (!table) {
+        return;
+    }
+
+    let rows;
+    try {
+        rows = await fetchResponseProfiles(5, 1, 100);
+    } catch (err) {
+        console.error(err);
+        return;
+    }
+
+    renderResponseProfileTable(rows);
+}
+
 
 
 //
@@ -866,4 +982,5 @@ export async function initAnalysisUI() {
     await initEndpointAnomalyTable();
     await initClientFingerprintTable();
     await initAuthCookieTable();
+    await initResponseProfileTable();
 }
