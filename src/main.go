@@ -47,7 +47,7 @@ func main() {
 	setVerbose(*verbose)
 
 	if isVerbose() {
-		log.Printf("Flags: listen=%s mitm=%v ca=%s file=%s max-body=%d buffer-size=%d verbose=%s",
+		log.Printf("Flags: listen=%s mitm=%v ca=%s file=%s max-body=%d buffer-size=%d verbose=%v",
 			*listen, *mitm, *caDir, *persist, *maxBody, *bufferSize, *verbose)
 	}
 
